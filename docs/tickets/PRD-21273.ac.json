@@ -1,0 +1,114 @@
+[
+  {
+    "id": "TC-MSP-001",
+    "ac": "AC1",
+    "text": "Given a mocked GET /api/Monitoring response with records across 2 companies and 3 computers, When msp360_get_monitoring() is called with no filter, Then the result contains one entry per record with company, computer, plan, status, and error fields populated.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_get_monitoring_returns_company_and_computer_fields"]
+  },
+  {
+    "id": "TC-MSP-002",
+    "ac": "AC2",
+    "text": "Given the same mocked monitoring data, When msp360_get_monitoring(user_id=\"U1\") is called, Then only records for U1 are returned.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_get_monitoring_filters_by_user_id"]
+  },
+  {
+    "id": "TC-MSP-003",
+    "ac": "AC11",
+    "text": "Given a mocked response with 300 monitoring records, When msp360_get_monitoring() is called with the default limit, Then the result has at most 200 records, has_more=true, and the serialized size is under 20000 characters.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_get_monitoring_caps_result_size_and_sets_has_more"]
+  },
+  {
+    "id": "TC-MSP-004",
+    "ac": "AC3",
+    "text": "Given a mocked GET /api/Computers/{hid}/Plans response with 2 plans, When msp360_list_plans(hid=\"H1\") is called, Then both plans' id/name/type are returned.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_list_plans_returns_id_name_type"]
+  },
+  {
+    "id": "TC-MSP-005",
+    "ac": "AC4",
+    "text": "Given a mocked plan-info response showing Status: \"Error\", When msp360_get_plan_info(hid=\"H1\", plan_id=\"P1\") is called, Then the result's status and error_message reflect that.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_get_plan_info_surfaces_error_status"]
+  },
+  {
+    "id": "TC-MSP-006",
+    "ac": "AC5",
+    "text": "Given a mocked history response with 3 runs, When msp360_get_plan_history(hid=\"H1\", plan_id=\"P1\", year=2026, month=10) is called, Then exactly those 3 runs are returned with start time/duration/status/data volume.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_get_plan_history_returns_filtered_runs"]
+  },
+  {
+    "id": "TC-MSP-007",
+    "ac": "AC6",
+    "text": "Given a mocked POST .../start that returns 200, When msp360_start_plan(hid=\"H1\", plan_id=\"P1\") is called, Then the result reports status: \"started\".",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_start_plan_reports_started"]
+  },
+  {
+    "id": "TC-MSP-008",
+    "ac": "AC7",
+    "text": "Given a mocked POST .../stop that returns 200, When msp360_stop_plan(hid=\"H1\", plan_id=\"P1\") is called, Then the result reports status: \"stopped\".",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_stop_plan_reports_stopped"]
+  },
+  {
+    "id": "TC-MSP-009",
+    "ac": "AC8",
+    "text": "Given a mocked 404 from the vendor for an unknown plan_id, When any of msp360_get_plan_info/start_plan/stop_plan is called, Then the tool returns a not_found error envelope, not a raw exception.",
+    "type": "auto",
+    "tests": [
+      "tests/test_tools.py::test_get_plan_info_maps_404_to_not_found",
+      "tests/test_tools.py::test_start_plan_maps_404_to_not_found",
+      "tests/test_tools.py::test_stop_plan_maps_404_to_not_found"
+    ]
+  },
+  {
+    "id": "TC-MSP-010",
+    "ac": "AC9",
+    "text": "Given a mocked 401 from POST /api/Provider/Login (bad credentials), When any tool is called, Then the tool returns an unauthorized error envelope with retryable=false and does not retry indefinitely.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_login_401_maps_to_unauthorized_no_infinite_retry"]
+  },
+  {
+    "id": "TC-MSP-011",
+    "ac": "AC9",
+    "text": "Given a cached valid token that the vendor then rejects (401) on a subsequent call, When the tool call is made, Then the client re-logs-in exactly once and retries; if the retry also 401s, the tool returns the unauthorized envelope.",
+    "type": "auto",
+    "tests": ["tests/test_middleware.py::test_single_relogin_retry_on_401_then_unauthorized"]
+  },
+  {
+    "id": "TC-MSP-012",
+    "ac": "AC10",
+    "text": "Given two concurrent requests carrying different X-Msp360-Username/X-Msp360-Password pairs hit the running container at the same time, When both resolve, Then each response reflects only its own credential pair's token/data, with no cross-talk in the cached token map.",
+    "type": "manual",
+    "steps": [
+      "Start the service locally (docker-compose up or uvicorn directly).",
+      "Configure two mock MSP360 backends (or two real test accounts, if available) returning distinguishable company/computer names.",
+      "Fire msp360_get_monitoring concurrently with X-Msp360-Username/X-Msp360-Password for account A and account B against the same running container.",
+      "Inspect both responses and the in-process token cache (via a debug log line or test hook)."
+    ],
+    "expect": "Account A's response contains only account A's company/computer names; account B's only account B's; the token cache has two distinct entries keyed by each credential pair, never one overwriting the other.",
+    "result": "untested",
+    "environment": "local"
+  },
+  {
+    "id": "TC-MSP-013",
+    "ac": "AC6,AC7",
+    "text": "Given a real MSP360 test account with a plan safe to interrupt, When msp360_start_plan then msp360_stop_plan are called against it, Then MSP360's own UI/history shows a run that started and was then cancelled, confirming the OQ1 REST paths are correct.",
+    "type": "manual",
+    "steps": [
+      "Obtain a real MSP360 Managed Backup test account with at least one computer and one backup plan safe to start/stop.",
+      "Call msp360_list_plans(hid) to find a plan id.",
+      "Call msp360_start_plan(hid, plan_id).",
+      "Within a few seconds, call msp360_stop_plan(hid, plan_id).",
+      "Open the MSP360 web console (or call msp360_get_plan_history) for that plan."
+    ],
+    "expect": "The plan's run history shows one run that started at the time of the start call and ended early (cancelled/stopped) rather than completing normally.",
+    "result": "blocked",
+    "evidence": "No MSP360 test account identified as of this design pass (2026-11-02). Per references/mcp-track.md 2.5/3, missing a vendor test account does not block design or merge; this case is recorded as needing one rather than marked pass."
+  }
+]
