@@ -1,0 +1,101 @@
+[
+  {
+    "id": "TC1",
+    "ac": "AC1",
+    "text": "Given a mocked vendor GET /api/Users response with two users, When msp360_list_users is called, Then the response has count: 2, two users entries each with exactly user_id/email/company/enabled/space_used_kb, and has_more: false.",
+    "type": "auto",
+    "tests": [
+      "tests/test_tools.py::test_list_users_returns_trimmed_fields"
+    ]
+  },
+  {
+    "id": "TC2",
+    "ac": "AC2",
+    "text": "Given a mocked vendor GET /api/Users response with zero users, When msp360_list_users is called, Then the response is {\"users\": [], \"count\": 0, \"has_more\": false} and not an error envelope.",
+    "type": "auto",
+    "tests": [
+      "tests/test_tools.py::test_list_users_empty_result_is_not_an_error"
+    ]
+  },
+  {
+    "id": "TC3",
+    "ac": "AC3",
+    "text": "Given the vendor login call (POST /api/Provider/Login) returns 401, When msp360_list_users is called, Then the result is {\"error\": {\"code\": \"unauthorized\", \"retryable\": false, ...}} and the mocked GET /api/Users client is never invoked.",
+    "type": "auto",
+    "tests": [
+      "tests/test_tools.py::test_list_users_login_rejected_returns_unauthorized_without_calling_list"
+    ]
+  },
+  {
+    "id": "TC4",
+    "ac": "AC4",
+    "text": "Given the request to the MCP server is missing the X-Msp360-Username header, When msp360_list_users is called, Then the server responds HTTP 401 listing the required headers, and no HTTP call to MSP360 is made.",
+    "type": "auto",
+    "tests": [
+      "tests/test_middleware.py::test_missing_credential_header_returns_401"
+    ]
+  },
+  {
+    "id": "TC5",
+    "ac": "AC5",
+    "text": "Given two concurrent requests with different credentials (tenant A's mocked vendor response returns user \"alice@acme.test\", tenant B's returns \"bob@contoso.test\"), When msp360_list_users is called for each, Then tenant A's result contains only \"alice@acme.test\" and tenant B's only \"bob@contoso.test\", with no cross-tenant mixing.",
+    "type": "auto",
+    "tests": [
+      "tests/test_tools.py::test_list_users_isolates_concurrent_tenant_results"
+    ]
+  },
+  {
+    "id": "TC6",
+    "ac": "AC6",
+    "text": "Given a mocked vendor 200 login response containing a distinctive access_token value, When msp360_list_users is called and its response body and all captured log output are searched for that exact string, Then the string is not found anywhere.",
+    "type": "auto",
+    "tests": [
+      "tests/test_tools.py::test_list_users_never_exposes_raw_token_or_password"
+    ]
+  },
+  {
+    "id": "TC7a",
+    "ac": "AC7",
+    "text": "Given a mocked vendor response with 60 users, When msp360_list_users() is called with no arguments, Then exactly 50 are returned and has_more: true.",
+    "type": "auto",
+    "tests": [
+      "tests/test_tools.py::test_list_users_default_limit_caps_at_50"
+    ]
+  },
+  {
+    "id": "TC7b",
+    "ac": "AC7",
+    "text": "Given the same 60-user mock, When msp360_list_users(limit=200) is called, Then all 60 are returned and has_more: false.",
+    "type": "auto",
+    "tests": [
+      "tests/test_tools.py::test_list_users_limit_above_actual_count_returns_all"
+    ]
+  },
+  {
+    "id": "TC7c",
+    "ac": "AC7",
+    "text": "Given the same 60-user mock, When msp360_list_users(limit=500) is called, Then at most 200 are returned (the hard cap wins over the requested limit).",
+    "type": "auto",
+    "tests": [
+      "tests/test_tools.py::test_list_users_hard_cap_wins_over_requested_limit"
+    ]
+  },
+  {
+    "id": "TC8",
+    "ac": "AC8",
+    "text": "Given the /api/Users call times out or returns a 5xx response, When msp360_list_users is called, Then the result is {\"error\": {\"code\": \"upstream_error\", \"retryable\": true, ...}}.",
+    "type": "auto",
+    "tests": [
+      "tests/test_tools.py::test_list_users_upstream_timeout_or_5xx_maps_to_upstream_error"
+    ]
+  },
+  {
+    "id": "TC9",
+    "ac": "AC9",
+    "text": "Given a mocked vendor response with one enabled user (Enabled: true) and one disabled user (Enabled: false), When msp360_list_users is called with no filter, Then both appear in the result with their actual enabled values.",
+    "type": "auto",
+    "tests": [
+      "tests/test_tools.py::test_list_users_does_not_filter_disabled_users"
+    ]
+  }
+]
