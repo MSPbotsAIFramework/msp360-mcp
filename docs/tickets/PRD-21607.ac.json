@@ -1,0 +1,143 @@
+[
+    {
+        "id": "TC1",
+        "ac": "AC1",
+        "text": "Given a mocked GET /api/Users/{userid}/Computers response with 2 computers and a mocked GET /api/Monitoring/{userId} response with matching plan records for both, When msp360_list_user_computers(user_id=\"U1\") is called, Then the result has count: 2, two computer entries each with destination_id/computer_name/status/last_backup_date/plans populated, and has_more: false.",
+        "type": "auto",
+        "tests": [
+            "tests/test_tools.py::test_list_user_computers_joins_inventory_and_monitoring"
+        ]
+    },
+    {
+        "id": "TC2",
+        "ac": "AC2",
+        "text": "Given a mocked GET /api/Users/{userid}/Computers response with zero computers, When msp360_list_user_computers is called, Then the result is {\"computers\": [], \"count\": 0, \"has_more\": false} and not an error envelope.",
+        "type": "auto",
+        "tests": [
+            "tests/test_tools.py::test_list_user_computers_empty_result_is_not_an_error"
+        ]
+    },
+    {
+        "id": "TC3",
+        "ac": "AC3",
+        "text": "Given the inventory call returns one computer and the monitoring call returns zero records for that ComputerName, When msp360_list_user_computers is called, Then that computer's entry has status: \"no_data\", last_backup_date: null, plans: [].",
+        "type": "auto",
+        "tests": [
+            "tests/test_tools.py::test_list_user_computers_no_monitoring_data_is_no_data_status"
+        ]
+    },
+    {
+        "id": "TC4",
+        "ac": "AC4",
+        "text": "Given the monitoring call returns two plan records for the same computer, one with Status: 0 (Success) and one with Status: 2 (Error), at different LastStart times, When msp360_list_user_computers is called, Then the computer's top-level status is \"error\" (most severe wins) and last_backup_date equals the later of the two LastStart values.",
+        "type": "auto",
+        "tests": [
+            "tests/test_tools.py::test_list_user_computers_aggregates_most_severe_status_and_latest_backup_date"
+        ]
+    },
+    {
+        "id": "TC5",
+        "ac": "AC5",
+        "text": "Given the monitoring call returns one plan record for each of the eight documented Status codes (0-7) across eight different computers, When msp360_list_user_computers is called, Then each computer's status is the corresponding label (success, overdue, error, running, unknown, interrupted, unexpectedly_closed, warning) and never a raw integer.",
+        "type": "auto",
+        "tests": [
+            "tests/test_tools.py::test_list_user_computers_maps_all_status_codes_to_labels"
+        ]
+    },
+    {
+        "id": "TC6",
+        "ac": "AC6",
+        "text": "Given a mocked POST /api/Provider/Login that returns 401, When msp360_list_user_computers is called, Then the result is {\"error\": {\"code\": \"unauthorized\", \"retryable\": false, ...}} and neither the Computers nor the Monitoring endpoint is called.",
+        "type": "auto",
+        "tests": [
+            "tests/test_tools.py::test_list_user_computers_login_rejected_returns_unauthorized_without_calling_vendor"
+        ]
+    },
+    {
+        "id": "TC7",
+        "ac": "AC7",
+        "text": "Given the request to the MCP server is missing the X-Msp360-Username header, When msp360_list_user_computers is called, Then the server responds HTTP 401 listing the required headers, and no HTTP call to MSP360 is made.",
+        "type": "auto",
+        "tests": [
+            "tests/test_middleware.py::test_missing_credential_header_returns_401"
+        ]
+    },
+    {
+        "id": "TC8",
+        "ac": "AC8",
+        "text": "Given two concurrent requests with different credentials (tenant A's mocked vendor backend returns computer \"ALICE-PC\", tenant B's returns \"BOB-PC\"), When msp360_list_user_computers is called for each at the same time, Then tenant A's result contains only \"ALICE-PC\" and tenant B's only \"BOB-PC\", with no cross-tenant mixing in the result or the cached token map.",
+        "type": "auto",
+        "tests": [
+            "tests/test_tools.py::test_list_user_computers_isolates_concurrent_tenant_results"
+        ]
+    },
+    {
+        "id": "TC9",
+        "ac": "AC9",
+        "text": "Given a mocked login response containing a distinctive access_token value, When msp360_list_user_computers is called and its response body and all captured log output are searched for that exact string, Then the string is not found anywhere.",
+        "type": "auto",
+        "tests": [
+            "tests/test_tools.py::test_list_user_computers_never_exposes_raw_token_or_password"
+        ]
+    },
+    {
+        "id": "TC10a",
+        "ac": "AC10",
+        "text": "Given a mocked inventory response with 60 computers, When msp360_list_user_computers(user_id=\"U1\") is called with no limit, Then exactly 50 are returned and has_more: true.",
+        "type": "auto",
+        "tests": [
+            "tests/test_tools.py::test_list_user_computers_default_limit_caps_at_50"
+        ]
+    },
+    {
+        "id": "TC10b",
+        "ac": "AC10",
+        "text": "Given the same 60-computer mock, When msp360_list_user_computers(user_id=\"U1\", limit=200) is called, Then all 60 are returned and has_more: false.",
+        "type": "auto",
+        "tests": [
+            "tests/test_tools.py::test_list_user_computers_limit_above_actual_count_returns_all"
+        ]
+    },
+    {
+        "id": "TC10c",
+        "ac": "AC10",
+        "text": "Given the same 60-computer mock, When msp360_list_user_computers(user_id=\"U1\", limit=500) is called, Then at most 200 are returned (the hard cap wins over the requested limit).",
+        "type": "auto",
+        "tests": [
+            "tests/test_tools.py::test_list_user_computers_hard_cap_wins_over_requested_limit"
+        ]
+    },
+    {
+        "id": "TC11",
+        "ac": "AC11",
+        "text": "Given the Monitoring call times out or returns a 5xx response while the inventory call succeeds, When msp360_list_user_computers is called, Then the result is {\"error\": {\"code\": \"upstream_error\", \"retryable\": true, ...}}.",
+        "type": "auto",
+        "tests": [
+            "tests/test_tools.py::test_list_user_computers_monitoring_upstream_error_maps_to_upstream_error"
+        ]
+    },
+    {
+        "id": "TC12",
+        "ac": "AC12",
+        "text": "Given a mocked 404 from the Computers call for an unrecognized user_id, When msp360_list_user_computers is called, Then the result is {\"error\": {\"code\": \"not_found\", \"retryable\": false, ...}}, not a raw exception or an empty success. (Assumption per OQ2; confirm against a live account before merge.)",
+        "type": "auto",
+        "tests": [
+            "tests/test_tools.py::test_list_user_computers_unrecognized_user_id_maps_to_not_found"
+        ]
+    },
+    {
+        "id": "TC13",
+        "ac": "AC1,AC4,AC12",
+        "text": "Given a real MSP360 test account and a real user_id obtained from msp360_list_users (PRD-21606), When msp360_list_user_computers(user_id) is called against it, Then (a) the returned computer_name values match what MSP360's own console shows for that user's endpoints, confirming the ComputerName join key actually aligns between the two vendor endpoints in practice, and (b) calling the tool with a deliberately invalid user_id shows which of OQ2's two possible vendor behaviors is real.",
+        "type": "manual",
+        "steps": [
+            "Obtain a real MSP360 Managed Backup test account with at least one backup user that has one or more computers with recent backup activity.",
+            "Call msp360_list_users to get a real user_id.",
+            "Call msp360_list_user_computers(user_id) and compare computer_name values and statuses against MSP360's own web console for the same user.",
+            "Call msp360_list_user_computers with a deliberately invalid user_id (e.g. a random GUID) and observe the vendor's actual HTTP response."
+        ],
+        "expect": "computer_name values and backup status match the console for the valid user_id; the invalid user_id case shows whether the vendor returns a 400/404 error (AC12, invalid_argument/not_found) or a 200 empty array (treated as AC2, not an error) -- whichever it is, this design's error-mapping assumption (OQ2) is confirmed or corrected.",
+        "result": "blocked",
+        "evidence": "No MSP360 test account identified as of this design pass (2026-11-03). Per references/mcp-track.md 2.5/3, missing a vendor test account does not block design or merge; this case is recorded as needing one rather than marked pass."
+    }
+]
