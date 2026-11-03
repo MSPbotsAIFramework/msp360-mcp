@@ -1,0 +1,58 @@
+[
+  {
+    "id": "TC1",
+    "ac": "AC1",
+    "text": "Given valid X-Msp360-Username/X-Msp360-Password headers and the vendor login call returns 200 with access_token and expires_in, When msp360_provider_login is called, Then the response is {\"authenticated\": true, \"expires_in\": <int>} and contains no access_token key.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_provider_login_returns_authenticated_without_token"]
+  },
+  {
+    "id": "TC2",
+    "ac": "AC1",
+    "text": "Given valid headers and the vendor login response has no expires_in field, When msp360_provider_login is called, Then the response is {\"authenticated\": true, \"expires_in\": null} and the call does not raise.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_provider_login_missing_expires_in_returns_null"]
+  },
+  {
+    "id": "TC3",
+    "ac": "AC2",
+    "text": "Given the vendor returns 401 for POST /api/Provider/Login, When msp360_provider_login is called, Then the result is a structured error envelope {\"error\": {\"code\": \"unauthorized\", \"retryable\": false, ...}} and not a raw exception.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_provider_login_rejected_credentials_returns_unauthorized"]
+  },
+  {
+    "id": "TC4",
+    "ac": "AC2",
+    "text": "Given the vendor returns 403 for POST /api/Provider/Login, When msp360_provider_login is called, Then the result is the same unauthorized/retryable:false envelope as the 401 case.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_provider_login_forbidden_returns_unauthorized"]
+  },
+  {
+    "id": "TC5",
+    "ac": "AC3",
+    "text": "Given the request to the MCP server is missing the X-Msp360-Password header, When msp360_provider_login is called, Then the server responds HTTP 401 listing the required headers, and the mocked vendor HTTP client is never invoked.",
+    "type": "auto",
+    "tests": ["tests/test_middleware.py::test_missing_credential_header_returns_401"]
+  },
+  {
+    "id": "TC6",
+    "ac": "AC4",
+    "text": "Given two concurrent requests with different credentials (tenant A invalid, tenant B valid) are both in flight at the same time, When msp360_provider_login is called for each, Then tenant A's result is unauthorized and tenant B's result is authenticated:true, with neither result swapped or shared between the two requests.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_provider_login_isolates_concurrent_tenant_credentials"]
+  },
+  {
+    "id": "TC7",
+    "ac": "AC5",
+    "text": "Given a mocked vendor 200 response containing a distinctive access_token string, When msp360_provider_login is called and its response body and all captured log output are searched for that exact string, Then the string is not found anywhere.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_provider_login_never_exposes_raw_token_or_password"]
+  },
+  {
+    "id": "TC8",
+    "ac": "AC6",
+    "text": "Given the vendor login call times out or returns a 5xx response, When msp360_provider_login is called, Then the result is {\"error\": {\"code\": \"upstream_error\", \"retryable\": true, ...}} and not an unhandled exception.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_provider_login_upstream_error_on_5xx_or_timeout"]
+  }
+]
