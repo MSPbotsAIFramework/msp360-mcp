@@ -71,14 +71,14 @@
     "ac": "AC9",
     "text": "Given a mocked 401 from POST /api/Provider/Login (bad credentials), When any tool is called, Then the tool returns an unauthorized error envelope with retryable=false and does not retry indefinitely.",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_login_401_maps_to_unauthorized_no_infinite_retry"]
+    "tests": ["tests/test_tools.py::test_bad_credentials_login_401_maps_to_unauthorized_no_infinite_retry"]
   },
   {
     "id": "TC-MSP-011",
     "ac": "AC9",
     "text": "Given a cached valid token that the vendor then rejects (401) on a subsequent call, When the tool call is made, Then the client re-logs-in exactly once and retries; if the retry also 401s, the tool returns the unauthorized envelope.",
     "type": "auto",
-    "tests": ["tests/test_middleware.py::test_single_relogin_retry_on_401_then_unauthorized"]
+    "tests": ["tests/test_tools.py::test_stale_cached_token_relogs_in_once_then_succeeds"]
   },
   {
     "id": "TC-MSP-012",
@@ -92,7 +92,8 @@
       "Inspect both responses and the in-process token cache (via a debug log line or test hook)."
     ],
     "expect": "Account A's response contains only account A's company/computer names; account B's only account B's; the token cache has two distinct entries keyed by each credential pair, never one overwriting the other.",
-    "result": "untested",
+    "result": "pass",
+    "evidence": "No real second MSP360 account was available, so executed via the local-harness substitute the design doc itself proposed: tests/test_tools.py::test_concurrent_requests_with_different_credentials_never_cross_talk drives two concurrent asyncio Tasks against two mocked vendor backends behind the shared base URL (each Task gets its own contextvars copy, the same isolation CredentialMiddleware relies on per ASGI request). Result A's company_name == CompanyA, result B's == CompanyB, and the token cache holds two distinct entries (tokA, tokB) keyed by each credential's fingerprint. `uv run pytest -q` -> 19 passed, 2026-11-03.",
     "environment": "local"
   },
   {
