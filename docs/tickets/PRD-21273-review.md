@@ -1,5 +1,51 @@
 # PRD-21273 · Code review
 
+## Round 2 · 2026-11-04 · reviewed c989597 (base c4c9439)
+
+Status: frozen @ c989597
+
+Verdict: approved
+
+### Round 1 fixes verified
+
+Both round 1 must-fix items confirmed resolved, independently re-checked (not just re-reading the
+"Fixes" section):
+
+1. **Chinese text** — `grep -rnP '[\x{4e00}-\x{9fff}]' --exclude-dir=.git --exclude-dir=.venv
+   --exclude=PRD-21273-review.md .` → 0 hits (exit 1), reproduced on `c989597`. The one remaining
+   hit in the repo is this review record's own quote of the original defect
+   (`PRD-21273-review.md:10`), which documents the finding rather than being a live instance of it
+   — acceptable, it is the frozen round-1 record, not the deliverable surface.
+2. **Stale `.ac.json` test pointers** — all 13 cases in `docs/tickets/PRD-21273.ac.json` checked:
+   11 `auto` cases resolve to real, existing functions in `tests/test_tools.py` (verified by
+   collecting the full set of referenced names and running `pytest -k "<name1> or <name2> or ..."`
+   — 11 selected, 11 passed, 0 deselected-that-should-have-matched); 2 `manual` cases (TC-MSP-012
+   pass, TC-MSP-013 blocked pending a real vendor account) are unaffected by this round. TC-MSP-005
+   now points at the new `test_get_plan_info_surfaces_error_status`, which asserts both
+   `body["status"] == "Error"` and `body["error_message"] == "backup failed: disk full"` against a
+   mocked `GET /api/Computers/H1/Plans/P1/info` response — this is exactly the AC4 scenario the
+   round-1 finding said had no test backing it.
+
+Full suite: `uv run pytest -q` reproduced independently (via a `python3.12 -m venv` + `pip install
+-e . pytest pytest-asyncio respx` substitute, `uv` not present on this host; same dependency pins
+as `pyproject.toml`'s `dev` group) → **20 passed**, 0 failed.
+
+### Incremental diff (`e454bd3...c989597`, i.e. since round 1's reviewed sha)
+
+Touches only `docs/tickets/PRD-21273-review.md` (round 1 record + these fixes' own doc trail),
+`docs/tickets/PRD-21273.ac.json` (9 pointer corrections), `docs/tickets/PRD-21273.md` (one
+paraphrase, no content change), and `tests/test_tools.py` (+1 new test). No `src/` changes. No new
+must-fix found in this diff.
+
+### Findings
+
+None (round 2). Round 1's other review conclusions — error envelope, credential/multi-tenant
+isolation, retry/backoff, result capping, tool contracts, README Connector section — are unchanged
+since round 1 (no `src/` or `README.md` diff between `e454bd3` and `c989597`) and already verified
+there; not re-litigated here.
+
+---
+
 ## Round 1 · 2026-11-04 · reviewed e454bd3 (base c4c9439)
 
 Verdict: changes requested
