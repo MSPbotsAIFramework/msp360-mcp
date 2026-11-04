@@ -32,8 +32,9 @@
     "text": "Given the request to the MCP server is missing the X-Msp360-Username header, When msp360_list_users is called, Then the server responds HTTP 401 listing the required headers, and no HTTP call to MSP360 is made.",
     "type": "auto",
     "tests": [
-      "tests/test_middleware.py::test_missing_credential_header_returns_401"
-    ]
+      "tests/test_middleware.py::test_mcp_without_credentials_returns_401_with_required_headers"
+    ],
+    "note": "dev leg: the credential middleware runs before any tool dispatch on /mcp, so this generic, already-existing PRD-21273 test covers msp360_list_users too; not duplicated per-tool."
   },
   {
     "id": "TC5",

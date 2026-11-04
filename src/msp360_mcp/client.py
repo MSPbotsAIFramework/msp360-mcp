@@ -260,3 +260,10 @@ class Msp360Client:
     async def get_monitoring(self, user_id: str | None) -> Any:
         path = f"/api/Monitoring/{user_id}" if user_id else "/api/Monitoring"
         return await self.get(path)
+
+    async def list_users(self) -> Any:
+        # No query parameters, no request body, no vendor-side pagination
+        # (confirmed against the vendor's own GET /api/Users doc page, see
+        # docs/tickets/PRD-21606.md "Current state") -- the tool layer applies
+        # limit/offset client-side.
+        return await self.get("/api/Users")
