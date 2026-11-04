@@ -4,28 +4,31 @@
     "ac": "AC1",
     "text": "Given a mocked GET /api/Monitoring response with records across 2 companies and 3 computers, When msp360_get_monitoring() is called with no filter, Then the result contains one entry per record with company, computer, plan, status, and error fields populated.",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_get_monitoring_returns_company_and_computer_fields"]
+    "tests": [
+      "tests/test_tools.py::test_monitoring_filters_by_user_id_and_trims_fields",
+      "tests/test_tools.py::test_login_then_vendor_call_returns_trimmed_plan_fields"
+    ]
   },
   {
     "id": "TC-MSP-002",
     "ac": "AC2",
     "text": "Given the same mocked monitoring data, When msp360_get_monitoring(user_id=\"U1\") is called, Then only records for U1 are returned.",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_get_monitoring_filters_by_user_id"]
+    "tests": ["tests/test_tools.py::test_monitoring_filters_by_user_id_and_trims_fields"]
   },
   {
     "id": "TC-MSP-003",
     "ac": "AC11",
     "text": "Given a mocked response with 300 monitoring records, When msp360_get_monitoring() is called with the default limit, Then the result has at most 200 records, has_more=true, and the serialized size is under 20000 characters.",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_get_monitoring_caps_result_size_and_sets_has_more"]
+    "tests": ["tests/test_tools.py::test_monitoring_caps_result_size_and_sets_has_more"]
   },
   {
     "id": "TC-MSP-004",
     "ac": "AC3",
     "text": "Given a mocked GET /api/Computers/{hid}/Plans response with 2 plans, When msp360_list_plans(hid=\"H1\") is called, Then both plans' id/name/type are returned.",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_list_plans_returns_id_name_type"]
+    "tests": ["tests/test_tools.py::test_login_then_vendor_call_returns_trimmed_plan_fields"]
   },
   {
     "id": "TC-MSP-005",
@@ -39,7 +42,7 @@
     "ac": "AC5",
     "text": "Given a mocked history response with 3 runs, When msp360_get_plan_history(hid=\"H1\", plan_id=\"P1\", year=2026, month=10) is called, Then exactly those 3 runs are returned with start time/duration/status/data volume.",
     "type": "auto",
-    "tests": ["tests/test_tools.py::test_get_plan_history_returns_filtered_runs"]
+    "tests": ["tests/test_tools.py::test_plan_history_returns_filtered_runs"]
   },
   {
     "id": "TC-MSP-007",
@@ -61,9 +64,8 @@
     "text": "Given a mocked 404 from the vendor for an unknown plan_id, When any of msp360_get_plan_info/start_plan/stop_plan is called, Then the tool returns a not_found error envelope, not a raw exception.",
     "type": "auto",
     "tests": [
-      "tests/test_tools.py::test_get_plan_info_maps_404_to_not_found",
-      "tests/test_tools.py::test_start_plan_maps_404_to_not_found",
-      "tests/test_tools.py::test_stop_plan_maps_404_to_not_found"
+      "tests/test_tools.py::test_not_found_404_on_start_and_stop_maps_cleanly",
+      "tests/test_tools.py::test_vendor_404_maps_to_not_found_envelope"
     ]
   },
   {

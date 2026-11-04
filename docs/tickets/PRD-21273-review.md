@@ -61,3 +61,41 @@ README Connector section is byte-for-byte identical to
 `~/.claude/skills/vendor-mcp-development/reference/readme-connector-section.md` (diff confirmed
 empty). No dependency, parameter-stacking, or scope issue found; this is a brand-new repo with
 nothing to clean up, consistent with the design's own conclusion.
+
+### Fixes (round 1)
+
+1. **Chinese text in `docs/tickets/PRD-21273.md:614-615`** — replaced the Chinese quote of the
+   pipeline skill's rule name with an English paraphrase of the same rule (what a test case
+   asserts is fixed by the upstream design and cannot be changed here; which test function is
+   used to check it is the implementer's choice). Re-ran the scan on the live deliverable surface
+   (design doc, code, `.ac.json`, README — i.e. everything except this frozen review record, which
+   necessarily quotes the original Chinese string as evidence of the finding):
+   `grep -rnP '[\x{4e00}-\x{9fff}]' --exclude-dir=.git --exclude-dir=.venv --exclude=PRD-21273-review.md .`
+   → 0 hits (exit 1). The only remaining hit in the repo is this review record's own quote of the
+   defect at line 10 above, which is left as-is since it documents what the finding was, not a
+   live instance of the problem.
+
+2. **Nine stale `tests` pointers in `docs/tickets/PRD-21273.ac.json`** — corrected all nine to the
+   real function names already used elsewhere in the repo (per the design doc's own Test case
+   matrix): TC-MSP-001 → `test_monitoring_filters_by_user_id_and_trims_fields` +
+   `test_login_then_vendor_call_returns_trimmed_plan_fields`; TC-MSP-002 →
+   `test_monitoring_filters_by_user_id_and_trims_fields`; TC-MSP-003 →
+   `test_monitoring_caps_result_size_and_sets_has_more`; TC-MSP-004 →
+   `test_login_then_vendor_call_returns_trimmed_plan_fields`; TC-MSP-006 →
+   `test_plan_history_returns_filtered_runs`; TC-MSP-009 →
+   `test_not_found_404_on_start_and_stop_maps_cleanly` + `test_vendor_404_maps_to_not_found_envelope`.
+   Verified every pointer in the corrected `.ac.json` resolves to a real test function
+   (`tests/test_tools.py`), not just by name-matching but by running each one individually
+   (`uv run pytest tests/test_tools.py::<name> -q`) — all pass.
+
+   For **TC-MSP-005**, the missing coverage was real, not just a naming drift: no existing test
+   asserted a `Status: "Error"` + populated `error_message` result from `msp360_get_plan_info`.
+   Added `test_get_plan_info_surfaces_error_status` to `tests/test_tools.py`, mocking
+   `GET /api/Computers/H1/Plans/P1/info` with `{"Status": "Error", "ErrorMessage": "backup failed:
+   disk full", ...}` and asserting both `body["status"] == "Error"` and
+   `body["error_message"] == "backup failed: disk full"`. TC-MSP-005's `tests` pointer in
+   `.ac.json` now points at this new, real test. This is new test coverage, not a reinterpretation
+   of what TC-MSP-005 asserts — the AC4 content is unchanged.
+
+   `uv run pytest -q` after the fix: **20 passed** (19 previous + 1 new), 0 failed, same cosmetic
+   deprecation warning as round 1.

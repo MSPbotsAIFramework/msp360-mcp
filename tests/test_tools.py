@@ -193,6 +193,38 @@ async def test_vendor_404_maps_to_not_found_envelope():
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_get_plan_info_surfaces_error_status():
+    """TC-MSP-005 (AC4): a plan-info response with Status: "Error" must surface
+    both the error status and the populated error_message, not just the
+    happy-path Idle/None fields covered by test_stale_cached_token_relogs_in_once_then_succeeds.
+    """
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-plan-error", "expires_in": 3600})
+    )
+    respx.get(f"{BASE_URL}/api/Computers/H1/Plans/P1/info").mock(
+        return_value=Response(
+            200,
+            json={
+                "Status": "Error",
+                "LastStart": "t1",
+                "NextStart": "t2",
+                "ErrorMessage": "backup failed: disk full",
+            },
+        )
+    )
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-plan-error")
+    try:
+        result = await mcp.call_tool("msp360_get_plan_info", {"hid": "H1", "plan_id": "P1"})
+    finally:
+        _credentials_var.reset(token)
+    body = json.loads(_result_text(result))
+    assert body["status"] == "Error"
+    assert body["error_message"] == "backup failed: disk full"
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_429_triggers_bounded_retry_then_rate_limited_envelope():
     respx.post(f"{BASE_URL}/api/Provider/Login").mock(
         return_value=Response(200, json={"access_token": "tok-429", "expires_in": 3600})
