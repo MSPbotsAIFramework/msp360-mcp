@@ -1,0 +1,10 @@
+MSP360 Managed Backup Service MCP Server
+Copyright 2026 MSPbots.ai
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+It was written by MSPbots.ai against MSP360's public Managed Backup Service (MBS) REST API
+documentation (https://help.mspbackups.com/mbs-api-specification/managed-backup-api/). Four of
+the six endpoints this server calls were corroborated by reading (read-only, not copied) a
+third-party open-source reference implementation, github.com/WYRE-AI/msp360-mcp (MIT-licensed),
+since the vendor's doc site's search index does not surface those specific sub-resource paths. No
+code from that or any other third-party project is included here.
