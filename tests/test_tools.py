@@ -29,6 +29,7 @@ from msp360_mcp.settings import Settings
 # Any signature change here is a breaking contract change (SOP section 13).
 EXPECTED_TOOLS = {
     "msp360_get_monitoring": (set(), {"readOnlyHint": True}),
+    "msp360_list_companies": (set(), {"readOnlyHint": True}),
     "msp360_list_plans": ({"hid"}, {"readOnlyHint": True}),
     "msp360_get_plan_info": ({"hid", "plan_id"}, {"readOnlyHint": True}),
     "msp360_get_plan_history": ({"hid", "plan_id"}, {"readOnlyHint": True}),
@@ -53,7 +54,7 @@ async def test_tools_list_snapshot():
     tools = await mcp.list_tools()
     names = {t.name for t in tools}
     assert names == set(EXPECTED_TOOLS), f"unexpected tool set: {names}"
-    assert len(tools) == 6
+    assert len(tools) == 7
 
     by_name = {t.name: t for t in tools}
     for name, (expected_required, expected_annotations) in EXPECTED_TOOLS.items():
@@ -468,3 +469,236 @@ async def test_concurrent_requests_with_different_credentials_never_cross_talk()
     fp_b = _fingerprint("accountB", "pw-accountB")
     assert _token_cache.get(fp_a) == "tokA"
     assert _token_cache.get(fp_b) == "tokB"
+
+
+# -- msp360_list_companies (PRD-21605) ------------------------------------
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_companies_returns_trimmed_fields():
+    """TC1 (AC1)."""
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-companies-1", "expires_in": 3600})
+    )
+    respx.get(f"{BASE_URL}/api/Companies").mock(
+        return_value=Response(
+            200,
+            json=[
+                {
+                    "Id": "C1",
+                    "Name": "Acme",
+                    "StorageLimit": 1000,
+                    "LicenseSettings": 0,
+                    "Destinations": ["d1"],
+                    "DefaultLicense": 1,
+                    "AllowedLicenses": [1, 2],
+                },
+                {"Id": "C2", "Name": "Contoso", "StorageLimit": 2000, "LicenseSettings": 1},
+            ],
+        )
+    )
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-companies-basic")
+    try:
+        result = await mcp.call_tool("msp360_list_companies", {})
+    finally:
+        _credentials_var.reset(token)
+    body = json.loads(_result_text(result))
+    assert body == {
+        "companies": [
+            {"company_id": "C1", "name": "Acme", "storage_limit_bytes": 1000, "license_settings": 0},
+            {"company_id": "C2", "name": "Contoso", "storage_limit_bytes": 2000, "license_settings": 1},
+        ],
+        "count": 2,
+        "has_more": False,
+    }
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_companies_empty_result_is_not_an_error():
+    """TC2 (AC2)."""
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-companies-empty", "expires_in": 3600})
+    )
+    respx.get(f"{BASE_URL}/api/Companies").mock(return_value=Response(200, json=[]))
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-companies-empty")
+    try:
+        result = await mcp.call_tool("msp360_list_companies", {})
+    finally:
+        _credentials_var.reset(token)
+    body = json.loads(_result_text(result))
+    assert body == {"companies": [], "count": 0, "has_more": False}
+    assert "error" not in body
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_companies_login_rejected_returns_unauthorized_without_calling_list():
+    """TC3 (AC3)."""
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(401, json={"message": "invalid username or password"})
+    )
+    list_route = respx.get(f"{BASE_URL}/api/Companies").mock(return_value=Response(200, json=[]))
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-companies-bad-creds")
+    try:
+        result = await mcp.call_tool("msp360_list_companies", {})
+    finally:
+        _credentials_var.reset(token)
+    envelope = json.loads(_result_text(result))
+    assert envelope["error"]["code"] == "unauthorized"
+    assert envelope["error"]["retryable"] is False
+    assert list_route.call_count == 0
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_companies_isolates_concurrent_tenant_results():
+    """TC5 (AC5)."""
+
+    def login_side_effect(request):
+        body = json.loads(request.content)
+        token = "tokCompaniesA" if body["UserName"] == "companiesAccountA" else "tokCompaniesB"
+        return Response(200, json={"access_token": token, "expires_in": 3600})
+
+    def companies_side_effect(request):
+        auth = request.headers["Authorization"]
+        if auth == "Bearer tokCompaniesA":
+            return Response(200, json=[{"Id": "C1", "Name": "Acme", "StorageLimit": 1, "LicenseSettings": 0}])
+        return Response(200, json=[{"Id": "C2", "Name": "Contoso", "StorageLimit": 2, "LicenseSettings": 0}])
+
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(side_effect=login_side_effect)
+    respx.get(f"{BASE_URL}/api/Companies").mock(side_effect=companies_side_effect)
+
+    mcp = create_mcp_server(Settings())
+
+    async def call_as(username: str) -> dict:
+        token = _set_creds(username, password="pw-" + username)
+        try:
+            result = await mcp.call_tool("msp360_list_companies", {})
+        finally:
+            _credentials_var.reset(token)
+        return json.loads(_result_text(result))
+
+    result_a, result_b = await asyncio.gather(
+        call_as("companiesAccountA"), call_as("companiesAccountB")
+    )
+
+    assert result_a["companies"] == [{"company_id": "C1", "name": "Acme", "storage_limit_bytes": 1, "license_settings": 0}]
+    assert result_b["companies"] == [{"company_id": "C2", "name": "Contoso", "storage_limit_bytes": 2, "license_settings": 0}]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_companies_never_exposes_raw_token_or_password(caplog):
+    """TC6 (AC6)."""
+    distinctive_token = "SECRET-TOKEN-xyz789-do-not-leak"
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": distinctive_token, "expires_in": 3600})
+    )
+    respx.get(f"{BASE_URL}/api/Companies").mock(
+        return_value=Response(200, json=[{"Id": "C1", "Name": "Acme", "StorageLimit": 1, "LicenseSettings": 0}])
+    )
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-companies-token-leak", password="SuperSecretPassword123")
+    try:
+        with caplog.at_level("DEBUG"):
+            result = await mcp.call_tool("msp360_list_companies", {})
+    finally:
+        _credentials_var.reset(token)
+    response_text = _result_text(result)
+    assert distinctive_token not in response_text
+    assert "SuperSecretPassword123" not in response_text
+    for record in caplog.records:
+        assert distinctive_token not in record.getMessage()
+        assert "SuperSecretPassword123" not in record.getMessage()
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_companies_default_limit_is_50():
+    """TC7a (AC7)."""
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-companies-limit50", "expires_in": 3600})
+    )
+    records = [{"Id": f"C{i}", "Name": f"Company {i}", "StorageLimit": i, "LicenseSettings": 0} for i in range(60)]
+    respx.get(f"{BASE_URL}/api/Companies").mock(return_value=Response(200, json=records))
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-companies-limit50")
+    try:
+        result = await mcp.call_tool("msp360_list_companies", {})
+    finally:
+        _credentials_var.reset(token)
+    body = json.loads(_result_text(result))
+    assert len(body["companies"]) == 50
+    assert body["has_more"] is True
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_companies_limit_above_count_returns_all():
+    """TC7b (AC7)."""
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-companies-limit200", "expires_in": 3600})
+    )
+    records = [{"Id": f"C{i}", "Name": f"Company {i}", "StorageLimit": i, "LicenseSettings": 0} for i in range(60)]
+    respx.get(f"{BASE_URL}/api/Companies").mock(return_value=Response(200, json=records))
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-companies-limit200")
+    try:
+        result = await mcp.call_tool("msp360_list_companies", {"limit": 200})
+    finally:
+        _credentials_var.reset(token)
+    body = json.loads(_result_text(result))
+    assert len(body["companies"]) == 60
+    assert body["has_more"] is False
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_companies_hard_cap_wins_over_requested_limit():
+    """TC7c (AC7)."""
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-companies-hardcap", "expires_in": 3600})
+    )
+    records = [{"Id": f"C{i}", "Name": f"Company {i}", "StorageLimit": i, "LicenseSettings": 0} for i in range(250)]
+    respx.get(f"{BASE_URL}/api/Companies").mock(return_value=Response(200, json=records))
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-companies-hardcap")
+    try:
+        result = await mcp.call_tool("msp360_list_companies", {"limit": 500})
+    finally:
+        _credentials_var.reset(token)
+    body = json.loads(_result_text(result))
+    assert len(body["companies"]) <= 200
+    assert body["has_more"] is True
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_companies_upstream_error_on_5xx_or_timeout():
+    """TC8 (AC8)."""
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-companies-5xx", "expires_in": 3600})
+    )
+    route = respx.get(f"{BASE_URL}/api/Companies").mock(
+        side_effect=[
+            Response(500, headers={"Retry-After": "0"}, json={"message": "internal error"}),
+            Response(500, headers={"Retry-After": "0"}, json={"message": "internal error"}),
+            Response(500, headers={"Retry-After": "0"}, json={"message": "internal error"}),
+            Response(500, headers={"Retry-After": "0"}, json={"message": "internal error"}),
+        ]
+    )
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-companies-5xx")
+    try:
+        result = await mcp.call_tool("msp360_list_companies", {})
+    finally:
+        _credentials_var.reset(token)
+    envelope = json.loads(_result_text(result))
+    assert envelope["error"]["code"] == "upstream_error"
+    assert envelope["error"]["retryable"] is True
+    assert route.call_count == 4
