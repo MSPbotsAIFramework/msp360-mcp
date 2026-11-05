@@ -11,21 +11,23 @@ from starlette.routing import Mount, Route
 
 from .middleware import CredentialMiddleware
 from .settings import Settings
-from .tools import companies, monitoring, plans
+from .tools import auth, companies, monitoring, plans
 
 INSTRUCTIONS = (
     "MSP360 Managed Backup Service (MBS) monitors and controls scheduled backup/restore plans "
-    "across the computers an MSP provider manages. msp360_get_monitoring gives the fleet-wide "
-    "view (every plan's latest run, status, and error across all companies and computers; "
-    "filter to one backup user with user_id). msp360_list_companies lists the customer "
-    "companies visible to the provider account. For a single computer: msp360_list_plans finds "
-    "its configured plans, msp360_get_plan_info / msp360_get_plan_history inspect one plan's "
-    "current state and run history, and msp360_start_plan / msp360_stop_plan trigger or cancel "
-    "a run. start/stop are fire-and-forget against an async backup engine — they report that "
-    "the action was accepted, not that the run has finished."
+    "across the computers an MSP provider manages. msp360_provider_login confirms the configured "
+    "provider account can authenticate — useful right after credentials are entered, before any "
+    "other MSP360 tool is used. msp360_get_monitoring gives the fleet-wide view (every plan's "
+    "latest run, status, and error across all companies and computers; filter to one backup user "
+    "with user_id). msp360_list_companies lists the customer companies visible to the provider "
+    "account. For a single computer: msp360_list_plans finds its configured plans, "
+    "msp360_get_plan_info / msp360_get_plan_history inspect one plan's current state and run "
+    "history, and msp360_start_plan / msp360_stop_plan trigger or cancel a run. start/stop are "
+    "fire-and-forget against an async backup engine — they report that the action was accepted, "
+    "not that the run has finished."
 )
 
-MODULES = (monitoring, plans, companies)
+MODULES = (auth, monitoring, plans, companies)
 
 
 def create_mcp_server(settings: Settings) -> FastMCP:

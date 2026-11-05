@@ -16,6 +16,7 @@ in client.py never leaks a cached token from one test into another.
 import asyncio
 import json
 
+import httpx
 import pytest
 import respx
 from httpx import Response
@@ -25,9 +26,10 @@ from msp360_mcp.middleware import Credentials, _credentials_var
 from msp360_mcp.server import create_mcp_server
 from msp360_mcp.settings import Settings
 
-# required params + annotation hints expected for each of the 6 tools.
+# required params + annotation hints expected for each of the 7 tools.
 # Any signature change here is a breaking contract change (SOP section 13).
 EXPECTED_TOOLS = {
+    "msp360_provider_login": (set(), {"readOnlyHint": True}),
     "msp360_get_monitoring": (set(), {"readOnlyHint": True}),
     "msp360_list_companies": (set(), {"readOnlyHint": True}),
     "msp360_list_plans": ({"hid"}, {"readOnlyHint": True}),
@@ -54,7 +56,7 @@ async def test_tools_list_snapshot():
     tools = await mcp.list_tools()
     names = {t.name for t in tools}
     assert names == set(EXPECTED_TOOLS), f"unexpected tool set: {names}"
-    assert len(tools) == 7
+    assert len(tools) == 8
 
     by_name = {t.name: t for t in tools}
     for name, (expected_required, expected_annotations) in EXPECTED_TOOLS.items():
@@ -421,6 +423,172 @@ async def test_not_found_404_on_start_and_stop_maps_cleanly():
     for result in (start_result, stop_result):
         envelope = json.loads(_result_text(result))
         assert envelope["error"]["code"] == "not_found"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_provider_login_returns_authenticated_without_token():
+    """TC1 (AC1): valid credentials -> {authenticated: true, expires_in: <int>}, no access_token key."""
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "secret-tok-1", "expires_in": 1800})
+    )
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-login-ok")
+    try:
+        result = await mcp.call_tool("msp360_provider_login", {})
+    finally:
+        _credentials_var.reset(token)
+    body = json.loads(_result_text(result))
+    assert body == {"authenticated": True, "expires_in": 1800}
+    assert "access_token" not in body
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_provider_login_missing_expires_in_returns_null():
+    """TC2 (AC1): vendor response omits expires_in -> expires_in: null, no raise."""
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "secret-tok-2"})
+    )
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-login-no-expiry")
+    try:
+        result = await mcp.call_tool("msp360_provider_login", {})
+    finally:
+        _credentials_var.reset(token)
+    body = json.loads(_result_text(result))
+    assert body == {"authenticated": True, "expires_in": None}
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_provider_login_rejected_credentials_returns_unauthorized():
+    """TC3 (AC2): vendor 401 on the login call -> unauthorized/retryable:false envelope."""
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(401, json={"message": "invalid username or password"})
+    )
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-login-401")
+    try:
+        result = await mcp.call_tool("msp360_provider_login", {})
+    finally:
+        _credentials_var.reset(token)
+    envelope = json.loads(_result_text(result))
+    assert envelope["error"]["code"] == "unauthorized"
+    assert envelope["error"]["retryable"] is False
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_provider_login_forbidden_returns_unauthorized():
+    """TC4 (AC2): vendor 403 on the login call -> same unauthorized/retryable:false envelope as 401."""
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(403, json={"message": "invalid username or password"})
+    )
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-login-403")
+    try:
+        result = await mcp.call_tool("msp360_provider_login", {})
+    finally:
+        _credentials_var.reset(token)
+    envelope = json.loads(_result_text(result))
+    assert envelope["error"]["code"] == "unauthorized"
+    assert envelope["error"]["retryable"] is False
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_provider_login_never_exposes_raw_token_or_password():
+    """TC7 (AC5): a distinctive access_token string from a mocked 200 response must not appear
+    anywhere in the tool's returned JSON text."""
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "secret-tok-leak-check", "expires_in": 1800})
+    )
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-login-leak-check")
+    try:
+        result = await mcp.call_tool("msp360_provider_login", {})
+    finally:
+        _credentials_var.reset(token)
+    assert "secret-tok-leak-check" not in _result_text(result)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_provider_login_does_not_use_or_populate_token_cache():
+    """verify_login() is a fresh-login-every-time connectivity check (PRD-21604 non-functional):
+    it must not read a pre-existing cached token for this credential pair, and must not leave a
+    new cache entry behind for other tools to pick up."""
+    _token_cache.invalidate(_fingerprint("user-login-nocache", "pw"))
+    login_route = respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-nocache", "expires_in": 60})
+    )
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-login-nocache")
+    try:
+        await mcp.call_tool("msp360_provider_login", {})
+        await mcp.call_tool("msp360_provider_login", {})
+    finally:
+        _credentials_var.reset(token)
+    # Two calls -> two fresh vendor logins, unlike the other tools' cached-token path.
+    assert login_route.call_count == 2
+    assert _token_cache.get(_fingerprint("user-login-nocache", "pw")) is None
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_provider_login_upstream_error_on_5xx_or_timeout():
+    """TC8 (AC6): vendor 5xx and a connection timeout on the login call both map to the
+    upstream_error/retryable:true envelope, not an unhandled exception."""
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(return_value=Response(503, json={"message": "down"}))
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-login-5xx")
+    try:
+        result = await mcp.call_tool("msp360_provider_login", {})
+    finally:
+        _credentials_var.reset(token)
+    envelope = json.loads(_result_text(result))
+    assert envelope["error"]["code"] == "upstream_error"
+    assert envelope["error"]["retryable"] is True
+
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(side_effect=httpx.ConnectTimeout("timed out"))
+    token = _set_creds("user-login-timeout")
+    try:
+        result = await mcp.call_tool("msp360_provider_login", {})
+    finally:
+        _credentials_var.reset(token)
+    envelope = json.loads(_result_text(result))
+    assert envelope["error"]["code"] == "upstream_error"
+    assert envelope["error"]["retryable"] is True
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_provider_login_isolates_concurrent_tenant_credentials():
+    """TC6 (AC4): two tenants calling msp360_provider_login concurrently, one with valid
+    credentials and one invalid, never see each other's outcome."""
+
+    def login_side_effect(request):
+        body = json.loads(request.content)
+        if body["UserName"] == "good-account":
+            return Response(200, json={"access_token": "tokGood", "expires_in": 900})
+        return Response(401, json={"message": "invalid username or password"})
+
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(side_effect=login_side_effect)
+    mcp = create_mcp_server(Settings())
+
+    async def call_as(username: str) -> dict:
+        token = _set_creds(username, password="pw-" + username)
+        try:
+            result = await mcp.call_tool("msp360_provider_login", {})
+        finally:
+            _credentials_var.reset(token)
+        return json.loads(_result_text(result))
+
+    result_good, result_bad = await asyncio.gather(call_as("good-account"), call_as("bad-account"))
+
+    assert result_good == {"authenticated": True, "expires_in": 900}
+    assert result_bad["error"]["code"] == "unauthorized"
 
 
 @pytest.mark.asyncio
