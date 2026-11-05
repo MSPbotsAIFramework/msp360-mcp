@@ -11,6 +11,9 @@ paths are corroborated by a third-party reference implementation
 "Current state" and "Open questions" OQ1) rather than directly readable vendor text. If a live
 account later shows a different path, only this module's path strings change — the tool-facing
 contract in tools/*.py does not (see docs/tickets/PRD-21273.md "Decisions made by DEV01").
+`GET /api/Companies` (used by `list_companies()`, PRD-21605) is confirmed directly from the live
+vendor Swagger document at api.mspbackups.com/help/v2/swagger — see docs/tickets/PRD-21605.md
+"Current state".
 
 Credential handling: MSP360 has no API-key auth, only a username/password login that exchanges for
 a short-lived bearer token (`POST /api/Provider/Login` -> {access_token, expires_in}). Per SOP
@@ -119,21 +122,49 @@ class Msp360Client:
         self._password = password
         self._fingerprint = _fingerprint(username, password)
 
-    async def _login(self) -> str:
+    async def _call_login_endpoint(self) -> tuple[str, int | None]:
+        """POST /api/Provider/Login and parse the response.
+
+        Shared by `_login` (which also populates the token cache) and
+        `verify_login` (PRD-21604's connectivity check, which does not touch
+        the cache). Raises Msp360ApiError on any non-2xx response, a network
+        failure/timeout (status 0, same convention as `_request`), or a
+        missing `access_token`. `expires_in` is None when the vendor
+        response omits the field (see docs/tickets/PRD-21604.md OQ1).
+        """
         client = _get_http_client()
-        resp = await client.post(
-            f"{BASE_URL}/api/Provider/Login",
-            json={"UserName": self._username, "Password": self._password},
-        )
+        try:
+            resp = await client.post(
+                f"{BASE_URL}/api/Provider/Login",
+                json={"UserName": self._username, "Password": self._password},
+            )
+        except httpx.RequestError as exc:
+            raise Msp360ApiError(0, f"Could not reach MSP360: {exc or type(exc).__name__}") from exc
         if resp.status_code >= 400:
             raise Msp360ApiError(resp.status_code, self._extract_message(resp))
         body = resp.json()
         token = body.get("access_token")
-        expires_in = body.get("expires_in", 0)
         if not token:
             raise Msp360ApiError(resp.status_code, "MSP360 login response had no access_token")
-        _token_cache.set(self._fingerprint, token, float(expires_in))
+        expires_in = body.get("expires_in")
+        return token, int(expires_in) if isinstance(expires_in, (int, float)) else None
+
+    async def _login(self) -> str:
+        token, expires_in = await self._call_login_endpoint()
+        _token_cache.set(self._fingerprint, token, float(expires_in or 0))
         return token
+
+    async def verify_login(self) -> int | None:
+        """Perform a fresh MSP360 login purely to confirm the credentials work.
+
+        Used by msp360_provider_login (PRD-21604), a connectivity check: it
+        always calls the vendor (never reads the shared token cache) and
+        returns only `expires_in` — the raw token stays local to this call
+        and is discarded immediately after, never cached, logged, or
+        returned to the caller (AC1, AC5).
+        """
+        _, expires_in = await self._call_login_endpoint()
+        return expires_in
 
     async def _get_token(self, *, force_refresh: bool = False) -> str:
         if not force_refresh:
@@ -267,3 +298,15 @@ class Msp360Client:
         # docs/tickets/PRD-21606.md "Current state") -- the tool layer applies
         # limit/offset client-side.
         return await self.get("/api/Users")
+
+    async def list_domains(self) -> Any:
+        # No trailing slash: the live Swagger renders the path this way (the
+        # ticket's own text has a trailing slash; OQ2 treats these as the same
+        # endpoint and the machine-readable Swagger form as authoritative).
+        return await self.get("/api/apps/domains")
+
+    async def list_companies(self) -> Any:
+        return await self.get("/api/Companies")
+
+    async def list_user_computers(self, user_id: str) -> Any:
+        return await self.get(f"/api/Users/{user_id}/Computers")
