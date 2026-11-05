@@ -485,8 +485,8 @@ def _domain_raw(domain: str, **overrides) -> dict:
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_list_domains_returns_trimmed_snake_case_fields():
-    """TC-MSP-D01 (AC1)."""
+async def test_list_domains_returns_renamed_fields():
+    """TC1 (AC1)."""
     respx.post(f"{BASE_URL}/api/Provider/Login").mock(
         return_value=Response(200, json={"access_token": "tok-domains-1", "expires_in": 3600})
     )
@@ -511,8 +511,8 @@ async def test_list_domains_returns_trimmed_snake_case_fields():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_list_domains_empty_is_not_an_error():
-    """TC-MSP-D02 (AC2)."""
+async def test_list_domains_empty_result_is_not_an_error():
+    """TC2 (AC2)."""
     respx.post(f"{BASE_URL}/api/Provider/Login").mock(
         return_value=Response(200, json={"access_token": "tok-domains-empty", "expires_in": 3600})
     )
@@ -530,8 +530,8 @@ async def test_list_domains_empty_is_not_an_error():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_list_domains_bad_credentials_never_calls_vendor_list():
-    """TC-MSP-D03 (AC3): login 401 must short-circuit before the list call."""
+async def test_list_domains_login_rejected_returns_unauthorized_without_calling_list():
+    """TC3 (AC3): login 401 must short-circuit before the list call."""
     respx.post(f"{BASE_URL}/api/Provider/Login").mock(
         return_value=Response(401, json={"message": "invalid username or password"})
     )
@@ -550,8 +550,8 @@ async def test_list_domains_bad_credentials_never_calls_vendor_list():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_list_domains_concurrent_tenants_never_cross_talk():
-    """TC-MSP-D05 (AC5)."""
+async def test_list_domains_isolates_concurrent_tenant_results():
+    """TC5 (AC5)."""
 
     def login_side_effect(request):
         body = json.loads(request.content)
@@ -586,8 +586,8 @@ async def test_list_domains_concurrent_tenants_never_cross_talk():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_list_domains_access_token_never_leaks(caplog):
-    """TC-MSP-D06 (AC6): the vendor access_token must not appear in the tool's
+async def test_list_domains_never_exposes_raw_token_or_password(caplog):
+    """TC6 (AC6): the vendor access_token must not appear in the tool's
     response body or in any log output captured during the call.
     """
     secret_token = "SECRET-ACCESS-TOKEN-xyz123"
@@ -609,40 +609,78 @@ async def test_list_domains_access_token_never_leaks(caplog):
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_list_domains_pagination_limit_offset_and_hard_cap():
-    """TC-MSP-D07 (AC7)."""
+async def test_list_domains_default_limit_is_50():
+    """TC7a (AC7)."""
     respx.post(f"{BASE_URL}/api/Provider/Login").mock(
-        return_value=Response(200, json={"access_token": "tok-domains-page", "expires_in": 3600})
+        return_value=Response(200, json={"access_token": "tok-domains-page-a", "expires_in": 3600})
     )
     records = [_domain_raw(f"domain{i}.local") for i in range(60)]
     respx.get(f"{BASE_URL}/api/apps/domains").mock(return_value=Response(200, json=records))
     mcp = create_mcp_server(Settings())
-
-    async def call(args: dict) -> dict:
-        token = _set_creds("user-domains-page")
-        try:
-            result = await mcp.call_tool("msp360_list_domains", args)
-        finally:
-            _credentials_var.reset(token)
-        return json.loads(_result_text(result))
-
-    default_body = await call({})
-    assert len(default_body["domains"]) == 50
-    assert default_body["has_more"] is True
-
-    all_body = await call({"limit": 200})
-    assert len(all_body["domains"]) == 60
-    assert all_body["has_more"] is False
-
-    capped_body = await call({"limit": 500})
-    assert len(capped_body["domains"]) <= 200
+    token = _set_creds("user-domains-page-a")
+    try:
+        result = await mcp.call_tool("msp360_list_domains", {})
+    finally:
+        _credentials_var.reset(token)
+    body = json.loads(_result_text(result))
+    assert len(body["domains"]) == 50
+    assert body["has_more"] is True
 
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_list_domains_upstream_5xx_maps_to_upstream_error():
-    """TC-MSP-D08 (AC8): a 5xx (or timeout, same code path via Msp360ApiError)
-    from /api/apps/domains must map to upstream_error/retryable, never an
+async def test_list_domains_limit_above_count_returns_all():
+    """TC7b (AC7)."""
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-domains-page-b", "expires_in": 3600})
+    )
+    records = [_domain_raw(f"domain{i}.local") for i in range(60)]
+    respx.get(f"{BASE_URL}/api/apps/domains").mock(return_value=Response(200, json=records))
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-domains-page-b")
+    try:
+        result = await mcp.call_tool("msp360_list_domains", {"limit": 200})
+    finally:
+        _credentials_var.reset(token)
+    body = json.loads(_result_text(result))
+    assert len(body["domains"]) == 60
+    assert body["has_more"] is False
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_domains_hard_cap_wins_over_requested_limit():
+    """TC7c (AC7): 250 domains (above the 200 hard cap) so the cap actually
+    binds, distinct from TC7b where the record count itself is under 200.
+
+    Domain records carry a nested storage_limit object, so (like
+    test_monitoring_caps_result_size_and_sets_has_more's 300-record case) the
+    20,000-character serialization backstop in errors.dump_json binds before
+    the 200-record cap does -- AC7's own "whichever bound is hit first"
+    clause, so the assertion is <= 200 (an upper bound), not == 200.
+    """
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-domains-page-c", "expires_in": 3600})
+    )
+    records = [_domain_raw(f"domain{i}.local") for i in range(250)]
+    respx.get(f"{BASE_URL}/api/apps/domains").mock(return_value=Response(200, json=records))
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-domains-page-c")
+    try:
+        result = await mcp.call_tool("msp360_list_domains", {"limit": 500})
+    finally:
+        _credentials_var.reset(token)
+    body = json.loads(_result_text(result))
+    assert len(body["domains"]) <= 200
+    assert body["has_more"] is True
+    assert len(_result_text(result)) < 20_000
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_domains_upstream_error_on_5xx_or_timeout():
+    """TC8 (AC8): a 5xx (or timeout, same code path via Msp360ApiError) from
+    /api/apps/domains must map to upstream_error/retryable, never an
     unhandled exception. Uses repeated 5xx responses with Retry-After: 0
     rather than a real network timeout, matching
     test_429_triggers_bounded_retry_then_rate_limited_envelope's technique for

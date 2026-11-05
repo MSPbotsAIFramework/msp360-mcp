@@ -44,6 +44,27 @@ def test_mcp_without_credentials_returns_401_with_required_headers():
     assert PASSWORD_HEADER in body["required_headers"]
 
 
+def test_missing_credential_header_returns_401():
+    """TC4 (PRD-21609, AC4): named to match docs/tickets/PRD-21609.ac.json's
+    prediction exactly. Behaviorally the same assertion as
+    test_mcp_without_credentials_returns_401_with_required_headers (the
+    credential middleware runs before any tool dispatch, so this is not
+    specific to msp360_list_domains), kept under this name so the ledger's
+    literal pointer stays accurate for this ticket.
+    """
+    app = _make_app()
+    with TestClient(app) as client:
+        resp = client.post(
+            "/mcp",
+            headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        )
+    assert resp.status_code == 401
+    body = resp.json()
+    assert USERNAME_HEADER in body["required_headers"]
+    assert PASSWORD_HEADER in body["required_headers"]
+
+
 def test_mcp_with_only_username_returns_401():
     app = _make_app()
     with TestClient(app) as client:
