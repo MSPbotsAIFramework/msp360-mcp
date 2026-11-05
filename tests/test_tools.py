@@ -26,7 +26,7 @@ from msp360_mcp.middleware import Credentials, _credentials_var
 from msp360_mcp.server import create_mcp_server
 from msp360_mcp.settings import Settings
 
-# required params + annotation hints expected for each of the 7 tools.
+# required params + annotation hints expected for each of the 11 tools.
 # Any signature change here is a breaking contract change (SOP section 13).
 EXPECTED_TOOLS = {
     "msp360_provider_login": (set(), {"readOnlyHint": True}),
@@ -37,6 +37,7 @@ EXPECTED_TOOLS = {
     "msp360_get_plan_history": ({"hid", "plan_id"}, {"readOnlyHint": True}),
     "msp360_start_plan": ({"hid", "plan_id"}, {"destructiveHint": False, "idempotentHint": False}),
     "msp360_stop_plan": ({"hid", "plan_id"}, {"destructiveHint": True, "idempotentHint": True}),
+    "msp360_list_users": (set(), {"readOnlyHint": True}),
     "msp360_list_user_computers": ({"user_id"}, {"readOnlyHint": True}),
     "msp360_list_domains": (set(), {"readOnlyHint": True}),
 }
@@ -58,7 +59,7 @@ async def test_tools_list_snapshot():
     tools = await mcp.list_tools()
     names = {t.name for t in tools}
     assert names == set(EXPECTED_TOOLS), f"unexpected tool set: {names}"
-    assert len(tools) == 10
+    assert len(tools) == 11
 
     by_name = {t.name: t for t in tools}
     for name, (expected_required, expected_annotations) in EXPECTED_TOOLS.items():
@@ -1525,3 +1526,285 @@ async def test_list_domains_upstream_error_on_5xx_or_timeout():
     assert envelope["error"]["code"] == "upstream_error"
     assert envelope["error"]["retryable"] is True
     assert route.call_count == 4
+
+
+# -- msp360_list_users (PRD-21606) -----------------------------------------
+#
+# AC4 (missing-header -> 401, no vendor call) is already covered generically
+# by the shared credential middleware -- see
+# tests/test_middleware.py::test_mcp_without_credentials_returns_401_with_required_headers,
+# which runs before any tool dispatch and therefore applies to this tool too.
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_users_returns_trimmed_fields():
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-users-1", "expires_in": 3600})
+    )
+    respx.get(f"{BASE_URL}/api/Users").mock(
+        return_value=Response(
+            200,
+            json=[
+                {
+                    "ID": "U1",
+                    "Email": "alice@acme.test",
+                    "FirstName": "Alice",
+                    "LastName": "Anderson",
+                    "NotificationEmails": ["alice@acme.test"],
+                    "Company": "Acme",
+                    "Enabled": True,
+                    "LicenseManagmentMode": 0,
+                    "SpaceUsed": 1024,
+                    "DestinationList": [{"ID": "D1"}],
+                },
+                {
+                    "ID": "U2",
+                    "Email": "bob@acme.test",
+                    "FirstName": "Bob",
+                    "LastName": "Brown",
+                    "NotificationEmails": [],
+                    "Company": "Acme",
+                    "Enabled": True,
+                    "LicenseManagmentMode": 1,
+                    "SpaceUsed": 2048,
+                    "DestinationList": [],
+                },
+            ],
+        )
+    )
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-list-users-1")
+    try:
+        result = await mcp.call_tool("msp360_list_users", {})
+    finally:
+        _credentials_var.reset(token)
+    body = json.loads(_result_text(result))
+    assert body == {
+        "users": [
+            {"user_id": "U1", "email": "alice@acme.test", "company": "Acme", "enabled": True, "space_used_kb": 1024},
+            {"user_id": "U2", "email": "bob@acme.test", "company": "Acme", "enabled": True, "space_used_kb": 2048},
+        ],
+        "count": 2,
+        "has_more": False,
+    }
+    for user in body["users"]:
+        assert set(user) == {"user_id", "email", "company", "enabled", "space_used_kb"}
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_users_empty_result_is_not_an_error():
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-users-empty", "expires_in": 3600})
+    )
+    respx.get(f"{BASE_URL}/api/Users").mock(return_value=Response(200, json=[]))
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-list-users-empty")
+    try:
+        result = await mcp.call_tool("msp360_list_users", {})
+    finally:
+        _credentials_var.reset(token)
+    body = json.loads(_result_text(result))
+    assert body == {"users": [], "count": 0, "has_more": False}
+    assert "error" not in body
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_users_login_rejected_returns_unauthorized_without_calling_list():
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(401, json={"message": "invalid username or password"})
+    )
+    list_route = respx.get(f"{BASE_URL}/api/Users").mock(return_value=Response(200, json=[]))
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-list-users-bad-creds")
+    try:
+        result = await mcp.call_tool("msp360_list_users", {})
+    finally:
+        _credentials_var.reset(token)
+    envelope = json.loads(_result_text(result))
+    assert envelope["error"]["code"] == "unauthorized"
+    assert envelope["error"]["retryable"] is False
+    assert list_route.call_count == 0
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_users_isolates_concurrent_tenant_results():
+    def login_side_effect(request):
+        body = json.loads(request.content)
+        token = "tokUsersA" if body["UserName"] == "tenantA" else "tokUsersB"
+        return Response(200, json={"access_token": token, "expires_in": 3600})
+
+    def users_side_effect(request):
+        auth = request.headers["Authorization"]
+        if auth == "Bearer tokUsersA":
+            email = "alice@acme.test"
+        else:
+            email = "bob@contoso.test"
+        return Response(
+            200,
+            json=[{"ID": "U1", "Email": email, "Company": "C", "Enabled": True, "SpaceUsed": 1}],
+        )
+
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(side_effect=login_side_effect)
+    respx.get(f"{BASE_URL}/api/Users").mock(side_effect=users_side_effect)
+
+    mcp = create_mcp_server(Settings())
+
+    async def call_as(username: str) -> dict:
+        token = _set_creds(username, password="pw-" + username)
+        try:
+            result = await mcp.call_tool("msp360_list_users", {})
+        finally:
+            _credentials_var.reset(token)
+        return json.loads(_result_text(result))
+
+    result_a, result_b = await asyncio.gather(call_as("tenantA"), call_as("tenantB"))
+
+    assert result_a["users"][0]["email"] == "alice@acme.test"
+    assert result_b["users"][0]["email"] == "bob@contoso.test"
+    assert len(result_a["users"]) == 1
+    assert len(result_b["users"]) == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_users_never_exposes_raw_token_or_password(caplog):
+    distinctive_token = "distinctive-secret-token-xyz-987"
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": distinctive_token, "expires_in": 3600})
+    )
+    respx.get(f"{BASE_URL}/api/Users").mock(
+        return_value=Response(
+            200, json=[{"ID": "U1", "Email": "alice@acme.test", "Company": "C", "Enabled": True, "SpaceUsed": 1}]
+        )
+    )
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-list-users-no-leak", password="s3cret-pw")
+    try:
+        with caplog.at_level("DEBUG"):
+            result = await mcp.call_tool("msp360_list_users", {})
+    finally:
+        _credentials_var.reset(token)
+    result_text = _result_text(result)
+    assert distinctive_token not in result_text
+    assert "s3cret-pw" not in result_text
+    log_text = caplog.text
+    assert distinctive_token not in log_text
+    assert "s3cret-pw" not in log_text
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_users_default_limit_caps_at_50():
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-users-60", "expires_in": 3600})
+    )
+    users = [
+        {"ID": f"U{i}", "Email": f"user{i}@acme.test", "Company": "Acme", "Enabled": True, "SpaceUsed": i}
+        for i in range(60)
+    ]
+    respx.get(f"{BASE_URL}/api/Users").mock(return_value=Response(200, json=users))
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-list-users-default-limit")
+    try:
+        result = await mcp.call_tool("msp360_list_users", {})
+    finally:
+        _credentials_var.reset(token)
+    body = json.loads(_result_text(result))
+    assert len(body["users"]) == 50
+    assert body["has_more"] is True
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_users_limit_above_actual_count_returns_all():
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-users-60b", "expires_in": 3600})
+    )
+    users = [
+        {"ID": f"U{i}", "Email": f"user{i}@acme.test", "Company": "Acme", "Enabled": True, "SpaceUsed": i}
+        for i in range(60)
+    ]
+    respx.get(f"{BASE_URL}/api/Users").mock(return_value=Response(200, json=users))
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-list-users-limit-200")
+    try:
+        result = await mcp.call_tool("msp360_list_users", {"limit": 200})
+    finally:
+        _credentials_var.reset(token)
+    body = json.loads(_result_text(result))
+    assert len(body["users"]) == 60
+    assert body["has_more"] is False
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_users_hard_cap_wins_over_requested_limit():
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-users-250c", "expires_in": 3600})
+    )
+    users = [
+        {"ID": f"U{i}", "Email": f"user{i}@acme.test", "Company": "Acme", "Enabled": True, "SpaceUsed": i}
+        for i in range(250)
+    ]
+    respx.get(f"{BASE_URL}/api/Users").mock(return_value=Response(200, json=users))
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-list-users-hard-cap")
+    try:
+        result = await mcp.call_tool("msp360_list_users", {"limit": 500})
+    finally:
+        _credentials_var.reset(token)
+    body = json.loads(_result_text(result))
+    # 250 upstream users, requested limit 500: the 200-item hard cap must win.
+    assert len(body["users"]) == 200
+    assert body["has_more"] is True
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_users_upstream_timeout_or_5xx_maps_to_upstream_error():
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-users-5xx", "expires_in": 3600})
+    )
+    respx.get(f"{BASE_URL}/api/Users").mock(
+        return_value=Response(500, json={"message": "internal server error"})
+    )
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-list-users-5xx")
+    try:
+        result = await mcp.call_tool("msp360_list_users", {})
+    finally:
+        _credentials_var.reset(token)
+    envelope = json.loads(_result_text(result))
+    assert envelope["error"]["code"] == "upstream_error"
+    assert envelope["error"]["retryable"] is True
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_users_does_not_filter_disabled_users():
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-users-disabled", "expires_in": 3600})
+    )
+    respx.get(f"{BASE_URL}/api/Users").mock(
+        return_value=Response(
+            200,
+            json=[
+                {"ID": "U1", "Email": "active@acme.test", "Company": "Acme", "Enabled": True, "SpaceUsed": 10},
+                {"ID": "U2", "Email": "inactive@acme.test", "Company": "Acme", "Enabled": False, "SpaceUsed": 20},
+            ],
+        )
+    )
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-list-users-disabled")
+    try:
+        result = await mcp.call_tool("msp360_list_users", {})
+    finally:
+        _credentials_var.reset(token)
+    body = json.loads(_result_text(result))
+    assert len(body["users"]) == 2
+    by_id = {u["user_id"]: u["enabled"] for u in body["users"]}
+    assert by_id == {"U1": True, "U2": False}

@@ -292,6 +292,13 @@ class Msp360Client:
         path = f"/api/Monitoring/{user_id}" if user_id else "/api/Monitoring"
         return await self.get(path)
 
+    async def list_users(self) -> Any:
+        # No query parameters, no request body, no vendor-side pagination
+        # (confirmed against the vendor's own GET /api/Users doc page, see
+        # docs/tickets/PRD-21606.md "Current state") -- the tool layer applies
+        # limit/offset client-side.
+        return await self.get("/api/Users")
+
     async def list_domains(self) -> Any:
         # No trailing slash: the live Swagger renders the path this way (the
         # ticket's own text has a trailing slash; OQ2 treats these as the same

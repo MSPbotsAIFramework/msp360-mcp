@@ -77,11 +77,12 @@ Links: [connect.mspbots.ai](https://connect.mspbots.ai) · [mspbots.ai](https://
 ## Overview
 
 Implements the [Model Context Protocol](https://modelcontextprotocol.io/) (Streamable HTTP
-transport) and exposes **10 tools** over MSP360's Managed Backup Service (MBS) REST API:
+transport) and exposes **11 tools** over MSP360's Managed Backup Service (MBS) REST API:
 
 - "Does this MSP360 connection actually work?" → `msp360_provider_login`
 - "Is backup healthy across every company and computer we manage?" → `msp360_get_monitoring`
   (optionally narrowed to one backup user with `user_id`)
+- "Which backup users does this provider account have?" → `msp360_list_users`
 - "What customer companies does this provider account manage?" → `msp360_list_companies`
 - "Which computers does this backup user have, and are they backing up correctly?" →
   `msp360_list_user_computers(user_id)` — one row per computer, with status, last backup date,
@@ -98,6 +99,7 @@ transport) and exposes **10 tools** over MSP360's Managed Backup Service (MBS) R
 |---|---|---|
 | Auth | `msp360_provider_login` | readOnly |
 | Monitoring | `msp360_get_monitoring`, `msp360_list_user_computers` | readOnly |
+| Users | `msp360_list_users` | readOnly |
 | Companies | `msp360_list_companies` | readOnly |
 | Plans | `msp360_list_plans`, `msp360_get_plan_info`, `msp360_get_plan_history` | readOnly |
 | | `msp360_start_plan` | not destructive, not idempotent |
