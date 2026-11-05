@@ -32,7 +32,7 @@
     "ac": "AC3",
     "text": "Given the request to the MCP server is missing the X-Msp360-Password header, When msp360_provider_login is called, Then the server responds HTTP 401 listing the required headers, and the mocked vendor HTTP client is never invoked.",
     "type": "auto",
-    "tests": ["tests/test_middleware.py::test_missing_credential_header_returns_401"]
+    "tests": ["tests/test_middleware.py::test_mcp_without_credentials_returns_401_with_required_headers"]
   },
   {
     "id": "TC6",
