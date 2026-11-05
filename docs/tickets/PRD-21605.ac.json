@@ -1,0 +1,72 @@
+[
+  {
+    "id": "TC1",
+    "ac": "AC1",
+    "text": "Given a mocked vendor GET /api/Companies response with two companies, When msp360_list_companies is called, Then the response has count: 2, two companies entries each with exactly company_id/name/storage_limit_bytes/license_settings, and has_more: false.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_list_companies_returns_trimmed_fields"]
+  },
+  {
+    "id": "TC2",
+    "ac": "AC2",
+    "text": "Given a mocked vendor GET /api/Companies response with zero companies, When msp360_list_companies is called, Then the response is {\"companies\": [], \"count\": 0, \"has_more\": false} and not an error envelope.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_list_companies_empty_result_is_not_an_error"]
+  },
+  {
+    "id": "TC3",
+    "ac": "AC3",
+    "text": "Given the vendor login call (POST /api/Provider/Login) returns 401, When msp360_list_companies is called, Then the result is {\"error\": {\"code\": \"unauthorized\", \"retryable\": false, ...}} and the mocked GET /api/Companies client is never invoked.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_list_companies_login_rejected_returns_unauthorized_without_calling_list"]
+  },
+  {
+    "id": "TC4",
+    "ac": "AC4",
+    "text": "Given the request to the MCP server is missing the X-Msp360-Username header, When msp360_list_companies is called, Then the server responds HTTP 401 listing the required headers, and no HTTP call to MSP360 is made.",
+    "type": "auto",
+    "tests": ["tests/test_middleware.py::test_missing_credential_header_returns_401"]
+  },
+  {
+    "id": "TC5",
+    "ac": "AC5",
+    "text": "Given two concurrent requests with different credentials (tenant A's mocked vendor response returns company \"Acme\", tenant B's returns company \"Contoso\"), When msp360_list_companies is called for each, Then tenant A's result contains only \"Acme\" and tenant B's only \"Contoso\", with no cross-tenant mixing.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_list_companies_isolates_concurrent_tenant_results"]
+  },
+  {
+    "id": "TC6",
+    "ac": "AC6",
+    "text": "Given a mocked vendor 200 login response containing a distinctive access_token value, When msp360_list_companies is called and its response body and all captured log output are searched for that exact string, Then the string is not found anywhere.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_list_companies_never_exposes_raw_token_or_password"]
+  },
+  {
+    "id": "TC7a",
+    "ac": "AC7",
+    "text": "Given a mocked vendor response with 60 companies, When msp360_list_companies() is called with no arguments, Then exactly 50 are returned and has_more: true.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_list_companies_default_limit_is_50"]
+  },
+  {
+    "id": "TC7b",
+    "ac": "AC7",
+    "text": "Given a mocked vendor response with 60 companies, When msp360_list_companies(limit=200) is called, Then all 60 are returned and has_more: false.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_list_companies_limit_above_count_returns_all"]
+  },
+  {
+    "id": "TC7c",
+    "ac": "AC7",
+    "text": "Given a mocked vendor response with 250 companies, When msp360_list_companies(limit=500) is called, Then at most 200 are returned (the hard cap wins over the requested limit) and has_more: true.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_list_companies_hard_cap_wins_over_requested_limit"]
+  },
+  {
+    "id": "TC8",
+    "ac": "AC8",
+    "text": "Given the GET /api/Companies call times out or returns a 5xx response, When msp360_list_companies is called, Then the result is {\"error\": {\"code\": \"upstream_error\", \"retryable\": true, ...}} and not an unhandled exception.",
+    "type": "auto",
+    "tests": ["tests/test_tools.py::test_list_companies_upstream_error_on_5xx_or_timeout"]
+  }
+]
