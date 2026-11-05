@@ -48,6 +48,11 @@ def test_missing_credential_header_returns_401():
     """TC4 (PRD-21605 AC4): missing X-Msp360-Username specifically — this is the
     same middleware path test_mcp_without_credentials_returns_401_with_required_headers
     covers, kept separately named to match docs/tickets/PRD-21605.ac.json's TC4.
+
+    TC7 (PRD-21607, AC7): the credential check is ASGI middleware ahead of
+    every tool, not per-tool code, so a tools/call of msp360_list_user_computers
+    without credential headers gets the same 401-before-any-vendor-call
+    guarantee. Both tickets' ledgers point at this one test id.
     """
     app = _make_app()
     with TestClient(app) as client:
@@ -60,8 +65,23 @@ def test_missing_credential_header_returns_401():
             },
             json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
         )
+        call_resp = client.post(
+            "/mcp",
+            headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
+            json={
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {"name": "msp360_list_user_computers", "arguments": {"user_id": "U1"}},
+            },
+        )
     assert resp.status_code == 401
     body = resp.json()
+    assert USERNAME_HEADER in body["required_headers"]
+    assert PASSWORD_HEADER in body["required_headers"]
+
+    assert call_resp.status_code == 401
+    body = call_resp.json()
     assert USERNAME_HEADER in body["required_headers"]
     assert PASSWORD_HEADER in body["required_headers"]
 

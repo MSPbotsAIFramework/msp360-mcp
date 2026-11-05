@@ -11,7 +11,7 @@ from starlette.routing import Mount, Route
 
 from .middleware import CredentialMiddleware
 from .settings import Settings
-from .tools import auth, companies, monitoring, plans
+from .tools import auth, companies, monitoring, plans, user_computers
 
 INSTRUCTIONS = (
     "MSP360 Managed Backup Service (MBS) monitors and controls scheduled backup/restore plans "
@@ -20,14 +20,17 @@ INSTRUCTIONS = (
     "other MSP360 tool is used. msp360_get_monitoring gives the fleet-wide view (every plan's "
     "latest run, status, and error across all companies and computers; filter to one backup user "
     "with user_id). msp360_list_companies lists the customer companies visible to the provider "
-    "account. For a single computer: msp360_list_plans finds its configured plans, "
+    "account. msp360_list_user_computers gives one backup user's computers with each "
+    "computer's backup status, last backup date, and contributing plans — the audit view for "
+    "one user, keyed off a user_id from msp360_list_users. For a single computer: "
+    "msp360_list_plans finds its configured plans, "
     "msp360_get_plan_info / msp360_get_plan_history inspect one plan's current state and run "
     "history, and msp360_start_plan / msp360_stop_plan trigger or cancel a run. start/stop are "
     "fire-and-forget against an async backup engine — they report that the action was accepted, "
     "not that the run has finished."
 )
 
-MODULES = (auth, monitoring, plans, companies)
+MODULES = (auth, monitoring, plans, companies, user_computers)
 
 
 def create_mcp_server(settings: Settings) -> FastMCP:

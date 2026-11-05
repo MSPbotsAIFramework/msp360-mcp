@@ -294,3 +294,6 @@ class Msp360Client:
 
     async def list_companies(self) -> Any:
         return await self.get("/api/Companies")
+
+    async def list_user_computers(self, user_id: str) -> Any:
+        return await self.get(f"/api/Users/{user_id}/Computers")
