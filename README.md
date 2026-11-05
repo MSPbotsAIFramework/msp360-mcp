@@ -77,10 +77,12 @@ Links: [connect.mspbots.ai](https://connect.mspbots.ai) · [mspbots.ai](https://
 ## Overview
 
 Implements the [Model Context Protocol](https://modelcontextprotocol.io/) (Streamable HTTP
-transport) and exposes **7 tools** over MSP360's Managed Backup Service (MBS) REST API:
+transport) and exposes **9 tools** over MSP360's Managed Backup Service (MBS) REST API:
 
+- "Does this MSP360 connection actually work?" → `msp360_provider_login`
 - "Is backup healthy across every company and computer we manage?" → `msp360_get_monitoring`
   (optionally narrowed to one backup user with `user_id`)
+- "What customer companies does this provider account manage?" → `msp360_list_companies`
 - "What plans are configured on this computer?" → `msp360_list_plans(hid)`
 - "What's this plan's current status / recent run history?" → `msp360_get_plan_info`,
   `msp360_get_plan_history`
@@ -90,11 +92,18 @@ transport) and exposes **7 tools** over MSP360's Managed Backup Service (MBS) RE
 
 | Category | Tools | Annotations |
 |---|---|---|
+| Auth | `msp360_provider_login` | readOnly |
 | Monitoring | `msp360_get_monitoring` | readOnly |
+| Companies | `msp360_list_companies` | readOnly |
 | Plans | `msp360_list_plans`, `msp360_get_plan_info`, `msp360_get_plan_history` | readOnly |
 | | `msp360_start_plan` | not destructive, not idempotent |
 | | `msp360_stop_plan` | destructive, idempotent |
 | Domains | `msp360_list_domains` | readOnly |
+
+`msp360_provider_login` never returns the vendor's `access_token` — it reports only
+`{"authenticated": true, "expires_in": <seconds or null>}`, or a structured error. It is a
+connectivity check, not a session manager: it performs its own fresh vendor login on every call
+and does not read or populate the token cache described below (see docs/tickets/PRD-21604.md).
 
 Every tool is read-only except `msp360_start_plan` / `msp360_stop_plan`, which trigger or cancel a
 run (fire-and-forget — they report that MSP360 accepted the action, not that the run has
@@ -160,11 +169,18 @@ Code is in `src/msp360_mcp/` (one module per resource under `tools/`), tests in 
   search index does not surface these specific sub-resource paths, though the "info"/"history"
   PowerShell cmdlets plainly call something equivalent. If a live account later shows a different
   path, only `src/msp360_mcp/client.py`'s path strings change — the tool contracts here do not.
-- **This repository is shared with six sibling tickets** (PRD-21604–21609), each adding one
-  separate MSP360 tool (`msp360_provider_login`, `msp360_list_companies`, `msp360_list_users`,
-  `msp360_list_user_computers`, `msp360_list_packages`, `msp360_list_domains`). None of them
-  overlap with the monitoring/plan-control tools in this README; coordinate changes to shared
-  files (this README, `pyproject.toml`) through the repo's `dev-lock`.
+- **This repository is shared with six sibling tickets** (PRD-21604, PRD-21605 — both implemented
+  in this build — plus PRD-21606–21609, each adding one more separate MSP360 tool:
+  `msp360_list_users`, `msp360_list_user_computers`, `msp360_list_packages`,
+  `msp360_list_domains`). None of them overlap with the monitoring/plan-control tools in this
+  README; coordinate changes to shared files (this README, `pyproject.toml`) through the repo's
+  `dev-lock`.
+- **No MSP360 test account was available at build time for `msp360_list_companies` either** — same
+  gap as the rest of this README's "Known gaps" entry above. The `CompanyModel.Id` field is read as
+  `company_id` on the assumption that it is the "CompanyID" field the ticket names under a
+  different vendor-schema name (design doc PRD-21605 OQ1); `StorageLimit`'s unit (OQ2) and
+  `LicenseSettings`'s enum labels (OQ3) are likewise unconfirmed and passed through verbatim. A spot
+  check against a live account would resolve all three.
 - **`msp360_get_monitoring`'s pagination is applied client-side** (`limit`/`offset`, capped at
   200 records / 20,000 characters) on top of whatever the vendor's `GET /api/Monitoring` returns
   in one shot — the vendor's own native paging contract is not confirmed from primary text. If a

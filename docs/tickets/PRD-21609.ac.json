@@ -25,7 +25,7 @@
     "ac": "AC4",
     "text": "Given the request to the MCP server is missing the X-Msp360-Username header, When msp360_list_domains is called, Then the server responds HTTP 401 listing the required headers, and no HTTP call to MSP360 is made.",
     "type": "auto",
-    "tests": ["tests/test_middleware.py::test_missing_credential_header_returns_401"]
+    "tests": ["tests/test_middleware.py::test_missing_all_credential_headers_returns_401"]
   },
   {
     "id": "TC5",
