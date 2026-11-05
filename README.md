@@ -77,8 +77,9 @@ Links: [connect.mspbots.ai](https://connect.mspbots.ai) · [mspbots.ai](https://
 ## Overview
 
 Implements the [Model Context Protocol](https://modelcontextprotocol.io/) (Streamable HTTP
-transport) and exposes **6 tools** over MSP360's Managed Backup Service (MBS) REST API:
+transport) and exposes **7 tools** over MSP360's Managed Backup Service (MBS) REST API:
 
+- "Does this MSP360 connection actually work?" → `msp360_provider_login`
 - "Is backup healthy across every company and computer we manage?" → `msp360_get_monitoring`
   (optionally narrowed to one backup user with `user_id`)
 - "What plans are configured on this computer?" → `msp360_list_plans(hid)`
@@ -88,10 +89,16 @@ transport) and exposes **6 tools** over MSP360's Managed Backup Service (MBS) RE
 
 | Category | Tools | Annotations |
 |---|---|---|
+| Auth | `msp360_provider_login` | readOnly |
 | Monitoring | `msp360_get_monitoring` | readOnly |
 | Plans | `msp360_list_plans`, `msp360_get_plan_info`, `msp360_get_plan_history` | readOnly |
 | | `msp360_start_plan` | not destructive, not idempotent |
 | | `msp360_stop_plan` | destructive, idempotent |
+
+`msp360_provider_login` never returns the vendor's `access_token` — it reports only
+`{"authenticated": true, "expires_in": <seconds or null>}`, or a structured error. It is a
+connectivity check, not a session manager: it performs its own fresh vendor login on every call
+and does not read or populate the token cache described below (see docs/tickets/PRD-21604.md).
 
 Every tool is read-only except `msp360_start_plan` / `msp360_stop_plan`, which trigger or cancel a
 run (fire-and-forget — they report that MSP360 accepted the action, not that the run has
@@ -158,10 +165,11 @@ Code is in `src/msp360_mcp/` (one module per resource under `tools/`), tests in 
   PowerShell cmdlets plainly call something equivalent. If a live account later shows a different
   path, only `src/msp360_mcp/client.py`'s path strings change — the tool contracts here do not.
 - **This repository is shared with six sibling tickets** (PRD-21604–21609), each adding one
-  separate MSP360 tool (`msp360_provider_login`, `msp360_list_companies`, `msp360_list_users`,
-  `msp360_list_user_computers`, `msp360_list_packages`, `msp360_list_domains`). None of them
-  overlap with the monitoring/plan-control tools in this README; coordinate changes to shared
-  files (this README, `pyproject.toml`) through the repo's `dev-lock`.
+  separate MSP360 tool (`msp360_provider_login` — this ticket, PRD-21604 — plus
+  `msp360_list_companies`, `msp360_list_users`, `msp360_list_user_computers`,
+  `msp360_list_packages`, `msp360_list_domains` from the remaining five). None of them overlap
+  with the monitoring/plan-control tools in this README; coordinate changes to shared files (this
+  README, `pyproject.toml`) through the repo's `dev-lock`.
 - **`msp360_get_monitoring`'s pagination is applied client-side** (`limit`/`offset`, capped at
   200 records / 20,000 characters) on top of whatever the vendor's `GET /api/Monitoring` returns
   in one shot — the vendor's own native paging contract is not confirmed from primary text. If a
