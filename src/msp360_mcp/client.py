@@ -292,6 +292,12 @@ class Msp360Client:
         path = f"/api/Monitoring/{user_id}" if user_id else "/api/Monitoring"
         return await self.get(path)
 
+    async def list_domains(self) -> Any:
+        # No trailing slash: the live Swagger renders the path this way (the
+        # ticket's own text has a trailing slash; OQ2 treats these as the same
+        # endpoint and the machine-readable Swagger form as authoritative).
+        return await self.get("/api/apps/domains")
+
     async def list_companies(self) -> Any:
         return await self.get("/api/Companies")
 

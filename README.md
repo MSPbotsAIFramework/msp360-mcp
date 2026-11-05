@@ -77,7 +77,7 @@ Links: [connect.mspbots.ai](https://connect.mspbots.ai) · [mspbots.ai](https://
 ## Overview
 
 Implements the [Model Context Protocol](https://modelcontextprotocol.io/) (Streamable HTTP
-transport) and exposes **9 tools** over MSP360's Managed Backup Service (MBS) REST API:
+transport) and exposes **10 tools** over MSP360's Managed Backup Service (MBS) REST API:
 
 - "Does this MSP360 connection actually work?" → `msp360_provider_login`
 - "Is backup healthy across every company and computer we manage?" → `msp360_get_monitoring`
@@ -91,6 +91,8 @@ transport) and exposes **9 tools** over MSP360's Managed Backup Service (MBS) RE
 - "What's this plan's current status / recent run history?" → `msp360_get_plan_info`,
   `msp360_get_plan_history`
 - "Start / cancel a run of this plan" → `msp360_start_plan`, `msp360_stop_plan`
+- "List the domains/apps under the MSP360 portal, with their storage usage and license counts"
+  → `msp360_list_domains` (a CloudBackup-tagged resource, distinct from computers or companies)
 
 | Category | Tools | Annotations |
 |---|---|---|
@@ -100,6 +102,7 @@ transport) and exposes **9 tools** over MSP360's Managed Backup Service (MBS) RE
 | Plans | `msp360_list_plans`, `msp360_get_plan_info`, `msp360_get_plan_history` | readOnly |
 | | `msp360_start_plan` | not destructive, not idempotent |
 | | `msp360_stop_plan` | destructive, idempotent |
+| Domains | `msp360_list_domains` | readOnly |
 
 `msp360_provider_login` never returns the vendor's `access_token` — it reports only
 `{"authenticated": true, "expires_in": <seconds or null>}`, or a structured error. It is a

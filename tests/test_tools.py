@@ -38,6 +38,7 @@ EXPECTED_TOOLS = {
     "msp360_start_plan": ({"hid", "plan_id"}, {"destructiveHint": False, "idempotentHint": False}),
     "msp360_stop_plan": ({"hid", "plan_id"}, {"destructiveHint": True, "idempotentHint": True}),
     "msp360_list_user_computers": ({"user_id"}, {"readOnlyHint": True}),
+    "msp360_list_domains": (set(), {"readOnlyHint": True}),
 }
 
 
@@ -57,7 +58,7 @@ async def test_tools_list_snapshot():
     tools = await mcp.list_tools()
     names = {t.name for t in tools}
     assert names == set(EXPECTED_TOOLS), f"unexpected tool set: {names}"
-    assert len(tools) == 9
+    assert len(tools) == 10
 
     by_name = {t.name: t for t in tools}
     for name, (expected_required, expected_annotations) in EXPECTED_TOOLS.items():
@@ -1280,3 +1281,247 @@ async def test_list_user_computers_unrecognized_user_id_maps_to_not_found():
     envelope = json.loads(_result_text(result))
     assert envelope["error"]["code"] == "not_found"
     assert envelope["error"]["retryable"] is False
+
+
+# -- msp360_list_domains (PRD-21609) --------------------------------------
+
+
+# -- msp360_list_domains (PRD-21609) --------------------------------------
+
+
+def _domain_raw(domain: str, **overrides) -> dict:
+    record = {
+        "Domain": domain,
+        "Storage": "12.3 GB",
+        "StorageLimit": {"TotalLimit": 100, "CommandDriveLimit": 50, "OtherServicesLimit": 50},
+        "StorageUsage": {"Total": 12.3},
+        "ActivatedLicenses": 3,
+    }
+    record.update(overrides)
+    return record
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_domains_returns_renamed_fields():
+    """TC1 (AC1)."""
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-domains-1", "expires_in": 3600})
+    )
+    respx.get(f"{BASE_URL}/api/apps/domains").mock(
+        return_value=Response(200, json=[_domain_raw("acme.local"), _domain_raw("beta.local", ActivatedLicenses=5)])
+    )
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-domains-list")
+    try:
+        result = await mcp.call_tool("msp360_list_domains", {})
+    finally:
+        _credentials_var.reset(token)
+    body = json.loads(_result_text(result))
+    assert body["count"] == 2
+    assert body["has_more"] is False
+    for entry in body["domains"]:
+        assert set(entry) == {"domain", "storage", "storage_limit", "storage_usage_total", "activated_licenses"}
+        assert set(entry["storage_limit"]) == {"total_limit", "command_drive_limit", "other_services_limit"}
+    assert body["domains"][0]["domain"] == "acme.local"
+    assert body["domains"][1]["activated_licenses"] == 5
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_domains_empty_result_is_not_an_error():
+    """TC2 (AC2)."""
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-domains-empty", "expires_in": 3600})
+    )
+    respx.get(f"{BASE_URL}/api/apps/domains").mock(return_value=Response(200, json=[]))
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-domains-empty")
+    try:
+        result = await mcp.call_tool("msp360_list_domains", {})
+    finally:
+        _credentials_var.reset(token)
+    body = json.loads(_result_text(result))
+    assert body == {"domains": [], "count": 0, "has_more": False}
+    assert "error" not in body
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_domains_login_rejected_returns_unauthorized_without_calling_list():
+    """TC3 (AC3): login 401 must short-circuit before the list call."""
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(401, json={"message": "invalid username or password"})
+    )
+    list_route = respx.get(f"{BASE_URL}/api/apps/domains").mock(return_value=Response(200, json=[]))
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-domains-bad-creds")
+    try:
+        result = await mcp.call_tool("msp360_list_domains", {})
+    finally:
+        _credentials_var.reset(token)
+    envelope = json.loads(_result_text(result))
+    assert envelope["error"]["code"] == "unauthorized"
+    assert envelope["error"]["retryable"] is False
+    assert list_route.call_count == 0
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_domains_isolates_concurrent_tenant_results():
+    """TC5 (AC5)."""
+
+    def login_side_effect(request):
+        body = json.loads(request.content)
+        token = "tokA" if body["UserName"] == "accountA-domains" else "tokB"
+        return Response(200, json={"access_token": token, "expires_in": 3600})
+
+    def domains_side_effect(request):
+        auth = request.headers["Authorization"]
+        domain = "acme.local" if auth == "Bearer tokA" else "contoso.local"
+        return Response(200, json=[_domain_raw(domain)])
+
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(side_effect=login_side_effect)
+    respx.get(f"{BASE_URL}/api/apps/domains").mock(side_effect=domains_side_effect)
+
+    mcp = create_mcp_server(Settings())
+
+    async def call_as(username: str) -> dict:
+        token = _set_creds(username, password="pw-" + username)
+        try:
+            result = await mcp.call_tool("msp360_list_domains", {})
+        finally:
+            _credentials_var.reset(token)
+        return json.loads(_result_text(result))
+
+    result_a, result_b = await asyncio.gather(
+        call_as("accountA-domains"), call_as("accountB-domains")
+    )
+
+    assert result_a["domains"][0]["domain"] == "acme.local"
+    assert result_b["domains"][0]["domain"] == "contoso.local"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_domains_never_exposes_raw_token_or_password(caplog):
+    """TC6 (AC6): the vendor access_token must not appear in the tool's
+    response body or in any log output captured during the call.
+    """
+    secret_token = "SECRET-ACCESS-TOKEN-xyz123"
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": secret_token, "expires_in": 3600})
+    )
+    respx.get(f"{BASE_URL}/api/apps/domains").mock(return_value=Response(200, json=[_domain_raw("acme.local")]))
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-domains-token-leak")
+    try:
+        with caplog.at_level("DEBUG"):
+            result = await mcp.call_tool("msp360_list_domains", {})
+    finally:
+        _credentials_var.reset(token)
+    response_text = _result_text(result)
+    assert secret_token not in response_text
+    assert all(secret_token not in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_domains_default_limit_is_50():
+    """TC7a (AC7)."""
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-domains-page-a", "expires_in": 3600})
+    )
+    records = [_domain_raw(f"domain{i}.local") for i in range(60)]
+    respx.get(f"{BASE_URL}/api/apps/domains").mock(return_value=Response(200, json=records))
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-domains-page-a")
+    try:
+        result = await mcp.call_tool("msp360_list_domains", {})
+    finally:
+        _credentials_var.reset(token)
+    body = json.loads(_result_text(result))
+    assert len(body["domains"]) == 50
+    assert body["has_more"] is True
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_domains_limit_above_count_returns_all():
+    """TC7b (AC7)."""
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-domains-page-b", "expires_in": 3600})
+    )
+    records = [_domain_raw(f"domain{i}.local") for i in range(60)]
+    respx.get(f"{BASE_URL}/api/apps/domains").mock(return_value=Response(200, json=records))
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-domains-page-b")
+    try:
+        result = await mcp.call_tool("msp360_list_domains", {"limit": 200})
+    finally:
+        _credentials_var.reset(token)
+    body = json.loads(_result_text(result))
+    assert len(body["domains"]) == 60
+    assert body["has_more"] is False
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_domains_hard_cap_wins_over_requested_limit():
+    """TC7c (AC7): 250 domains (above the 200 hard cap) so the cap actually
+    binds, distinct from TC7b where the record count itself is under 200.
+
+    Domain records carry a nested storage_limit object, so (like
+    test_monitoring_caps_result_size_and_sets_has_more's 300-record case) the
+    20,000-character serialization backstop in errors.dump_json binds before
+    the 200-record cap does -- AC7's own "whichever bound is hit first"
+    clause, so the assertion is <= 200 (an upper bound), not == 200.
+    """
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-domains-page-c", "expires_in": 3600})
+    )
+    records = [_domain_raw(f"domain{i}.local") for i in range(250)]
+    respx.get(f"{BASE_URL}/api/apps/domains").mock(return_value=Response(200, json=records))
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-domains-page-c")
+    try:
+        result = await mcp.call_tool("msp360_list_domains", {"limit": 500})
+    finally:
+        _credentials_var.reset(token)
+    body = json.loads(_result_text(result))
+    assert len(body["domains"]) <= 200
+    assert body["has_more"] is True
+    assert len(_result_text(result)) < 20_000
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_domains_upstream_error_on_5xx_or_timeout():
+    """TC8 (AC8): a 5xx (or timeout, same code path via Msp360ApiError) from
+    /api/apps/domains must map to upstream_error/retryable, never an
+    unhandled exception. Uses repeated 5xx responses with Retry-After: 0
+    rather than a real network timeout, matching
+    test_429_triggers_bounded_retry_then_rate_limited_envelope's technique for
+    a deterministic, fast test of the same bounded-retry-then-envelope path.
+    """
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-domains-5xx", "expires_in": 3600})
+    )
+    route = respx.get(f"{BASE_URL}/api/apps/domains").mock(
+        side_effect=[
+            Response(503, headers={"Retry-After": "0"}, json={"message": "unavailable"}),
+            Response(503, headers={"Retry-After": "0"}, json={"message": "unavailable"}),
+            Response(503, headers={"Retry-After": "0"}, json={"message": "unavailable"}),
+            Response(503, headers={"Retry-After": "0"}, json={"message": "unavailable"}),
+        ]
+    )
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-domains-5xx")
+    try:
+        result = await mcp.call_tool("msp360_list_domains", {})
+    finally:
+        _credentials_var.reset(token)
+    envelope = json.loads(_result_text(result))
+    assert envelope["error"]["code"] == "upstream_error"
+    assert envelope["error"]["retryable"] is True
+    assert route.call_count == 4

@@ -86,6 +86,31 @@ def test_missing_credential_header_returns_401():
     assert PASSWORD_HEADER in body["required_headers"]
 
 
+def test_missing_all_credential_headers_returns_401():
+    """TC4 (PRD-21609, AC4): both headers absent (not just username). Merge-conflict
+    rename (review round 1, 2026-11-05): this ticket's docs/tickets/PRD-21609.ac.json
+    originally pointed at test_missing_credential_header_returns_401, which collided
+    1:1 with PRD-21605's test of the same name (already on main, missing-username-only
+    scenario) when dev/PRD-21609 synced with main. Behaviorally the same assertion as
+    test_mcp_without_credentials_returns_401_with_required_headers (the credential
+    middleware runs before any tool dispatch, so this is not specific to
+    msp360_list_domains) — kept as a separate test, renamed rather than dropped, so the
+    ledger still has a passing test under TC4 and the PRD-21609.ac.json pointer (updated
+    in this same merge) stays accurate.
+    """
+    app = _make_app()
+    with TestClient(app) as client:
+        resp = client.post(
+            "/mcp",
+            headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        )
+    assert resp.status_code == 401
+    body = resp.json()
+    assert USERNAME_HEADER in body["required_headers"]
+    assert PASSWORD_HEADER in body["required_headers"]
+
+
 def test_mcp_with_only_username_returns_401():
     app = _make_app()
     with TestClient(app) as client:
