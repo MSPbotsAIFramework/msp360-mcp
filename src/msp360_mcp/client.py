@@ -11,6 +11,9 @@ paths are corroborated by a third-party reference implementation
 "Current state" and "Open questions" OQ1) rather than directly readable vendor text. If a live
 account later shows a different path, only this module's path strings change — the tool-facing
 contract in tools/*.py does not (see docs/tickets/PRD-21273.md "Decisions made by DEV01").
+`GET /api/Companies` (used by `list_companies()`, PRD-21605) is confirmed directly from the live
+vendor Swagger document at api.mspbackups.com/help/v2/swagger — see docs/tickets/PRD-21605.md
+"Current state".
 
 Credential handling: MSP360 has no API-key auth, only a username/password login that exchanges for
 a short-lived bearer token (`POST /api/Provider/Login` -> {access_token, expires_in}). Per SOP
@@ -288,3 +291,6 @@ class Msp360Client:
     async def get_monitoring(self, user_id: str | None) -> Any:
         path = f"/api/Monitoring/{user_id}" if user_id else "/api/Monitoring"
         return await self.get(path)
+
+    async def list_companies(self) -> Any:
+        return await self.get("/api/Companies")
