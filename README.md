@@ -77,7 +77,7 @@ Links: [connect.mspbots.ai](https://connect.mspbots.ai) · [mspbots.ai](https://
 ## Overview
 
 Implements the [Model Context Protocol](https://modelcontextprotocol.io/) (Streamable HTTP
-transport) and exposes **6 tools** over MSP360's Managed Backup Service (MBS) REST API:
+transport) and exposes **7 tools** over MSP360's Managed Backup Service (MBS) REST API:
 
 - "Is backup healthy across every company and computer we manage?" → `msp360_get_monitoring`
   (optionally narrowed to one backup user with `user_id`)
@@ -85,6 +85,8 @@ transport) and exposes **6 tools** over MSP360's Managed Backup Service (MBS) RE
 - "What's this plan's current status / recent run history?" → `msp360_get_plan_info`,
   `msp360_get_plan_history`
 - "Start / cancel a run of this plan" → `msp360_start_plan`, `msp360_stop_plan`
+- "List the domains/apps under the MSP360 portal, with their storage usage and license counts"
+  → `msp360_list_domains` (a CloudBackup-tagged resource, distinct from computers or companies)
 
 | Category | Tools | Annotations |
 |---|---|---|
@@ -92,6 +94,7 @@ transport) and exposes **6 tools** over MSP360's Managed Backup Service (MBS) RE
 | Plans | `msp360_list_plans`, `msp360_get_plan_info`, `msp360_get_plan_history` | readOnly |
 | | `msp360_start_plan` | not destructive, not idempotent |
 | | `msp360_stop_plan` | destructive, idempotent |
+| Domains | `msp360_list_domains` | readOnly |
 
 Every tool is read-only except `msp360_start_plan` / `msp360_stop_plan`, which trigger or cancel a
 run (fire-and-forget — they report that MSP360 accepted the action, not that the run has
