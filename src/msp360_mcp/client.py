@@ -260,3 +260,6 @@ class Msp360Client:
     async def get_monitoring(self, user_id: str | None) -> Any:
         path = f"/api/Monitoring/{user_id}" if user_id else "/api/Monitoring"
         return await self.get(path)
+
+    async def list_user_computers(self, user_id: str) -> Any:
+        return await self.get(f"/api/Users/{user_id}/Computers")

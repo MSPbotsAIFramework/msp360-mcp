@@ -44,6 +44,31 @@ def test_mcp_without_credentials_returns_401_with_required_headers():
     assert PASSWORD_HEADER in body["required_headers"]
 
 
+def test_missing_credential_header_returns_401():
+    """TC7 (PRD-21607, AC7): the credential check is ASGI middleware ahead of
+    every tool, not per-tool code, so msp360_list_user_computers gets the
+    same 401-before-any-vendor-call guarantee as every other tool in this
+    repo (see test_mcp_without_credentials_returns_401_with_required_headers
+    for the general case this restates for the new tool specifically).
+    """
+    app = _make_app()
+    with TestClient(app) as client:
+        resp = client.post(
+            "/mcp",
+            headers={"Content-Type": "application/json", "Accept": "application/json, text/event-stream"},
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "msp360_list_user_computers", "arguments": {"user_id": "U1"}},
+            },
+        )
+    assert resp.status_code == 401
+    body = resp.json()
+    assert USERNAME_HEADER in body["required_headers"]
+    assert PASSWORD_HEADER in body["required_headers"]
+
+
 def test_mcp_with_only_username_returns_401():
     app = _make_app()
     with TestClient(app) as client:
