@@ -687,11 +687,11 @@ async def test_list_users_limit_above_actual_count_returns_all():
 @respx.mock
 async def test_list_users_hard_cap_wins_over_requested_limit():
     respx.post(f"{BASE_URL}/api/Provider/Login").mock(
-        return_value=Response(200, json={"access_token": "tok-users-60c", "expires_in": 3600})
+        return_value=Response(200, json={"access_token": "tok-users-250c", "expires_in": 3600})
     )
     users = [
         {"ID": f"U{i}", "Email": f"user{i}@acme.test", "Company": "Acme", "Enabled": True, "SpaceUsed": i}
-        for i in range(60)
+        for i in range(250)
     ]
     respx.get(f"{BASE_URL}/api/Users").mock(return_value=Response(200, json=users))
     mcp = create_mcp_server(Settings())
@@ -701,8 +701,9 @@ async def test_list_users_hard_cap_wins_over_requested_limit():
     finally:
         _credentials_var.reset(token)
     body = json.loads(_result_text(result))
-    assert len(body["users"]) <= 200
-    assert len(body["users"]) == 60  # fewer than the hard cap exist; hard cap just doesn't expand beyond actual count
+    # 250 upstream users, requested limit 500: the 200-item hard cap must win.
+    assert len(body["users"]) == 200
+    assert body["has_more"] is True
 
 
 @pytest.mark.asyncio
