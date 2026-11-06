@@ -1,5 +1,7 @@
 # PRD-21608 · Code review
 
+Status: frozen @ a180d32
+
 ## Round 1 · 2026-11-06 · reviewed dev/PRD-21608 @ 164b51a (base 637748a)
 
 Verdict: changes requested
@@ -12,3 +14,16 @@ Verdict: changes requested
    - Re-ran full gate suite on the fix commit: `uv sync` clean; `uv run pytest -q` → `81 passed, 1 warning in 24.22s`; targeted re-check `uv run pytest -q tests/test_tools.py::test_list_packages_limit_above_count_returns_all` → `1 passed in 0.40s`; `python scripts/ticket_store.py validate --ac docs/tickets/PRD-21608.ac.json` → `ledger OK: 11 cases`.
    - Chinese-char scan (`grep -rnP '[\x{4e00}-\x{9fff}]' --exclude-dir=.git --exclude-dir=.venv .`) still reports hits, all pre-existing and in sibling tickets' review docs (`docs/tickets/PRD-21273-review.md`, `docs/tickets/PRD-21606-review.md`, `docs/tickets/PRD-21606.md`) quoting Chinese skill-rule text — unrelated to PRD-21608 and out of this must-fix's scope, left untouched.
    - `gitleaks` not installed on this host; skipped per the gate's "run it if present" rule (same as round 1).
+
+## Round 2 · 2026-11-06 · reviewed dev/PRD-21608 @ a180d32 (base 164b51a)
+
+Verdict: approved
+
+### Findings
+None.
+
+### Fixes round 1 — verified
+- Diff `164b51a...a180d32` touches only `docs/tickets/PRD-21608.ac.json` (TC7b `tests` pointer) and `docs/tickets/PRD-21608.md` (matching Test case matrix row); no production or test code changed.
+- Re-ran the renamed test directly: `uv run pytest -q tests/test_tools.py::test_list_packages_limit_above_count_returns_all` → `1 passed in 0.52s` (function confirmed at `tests/test_tools.py:2039`).
+- `python scripts/ticket_store.py validate --ac docs/tickets/PRD-21608.ac.json` → `ledger OK: 11 cases`.
+- No new must-fix introduced by the fix itself; the round 1 Chinese-char scan note (pre-existing hits in sibling tickets, out of scope) still holds and is unaffected by this change.
