@@ -68,7 +68,7 @@
     "text": "Given a mocked vendor response with 60 packages, When msp360_list_packages(limit=200) is called, Then all 60 are returned and has_more: false.",
     "type": "auto",
     "tests": [
-      "tests/test_tools.py::test_list_packages_limit_above_actual_count_returns_all"
+      "tests/test_tools.py::test_list_packages_limit_above_count_returns_all"
     ]
   },
   {
