@@ -26,7 +26,7 @@ from msp360_mcp.middleware import Credentials, _credentials_var
 from msp360_mcp.server import create_mcp_server
 from msp360_mcp.settings import Settings
 
-# required params + annotation hints expected for each of the 11 tools.
+# required params + annotation hints expected for each of the 12 tools.
 # Any signature change here is a breaking contract change (SOP section 13).
 EXPECTED_TOOLS = {
     "msp360_provider_login": (set(), {"readOnlyHint": True}),
@@ -40,6 +40,7 @@ EXPECTED_TOOLS = {
     "msp360_list_users": (set(), {"readOnlyHint": True}),
     "msp360_list_user_computers": ({"user_id"}, {"readOnlyHint": True}),
     "msp360_list_domains": (set(), {"readOnlyHint": True}),
+    "msp360_list_packages": (set(), {"readOnlyHint": True}),
 }
 
 
@@ -59,7 +60,7 @@ async def test_tools_list_snapshot():
     tools = await mcp.list_tools()
     names = {t.name for t in tools}
     assert names == set(EXPECTED_TOOLS), f"unexpected tool set: {names}"
-    assert len(tools) == 11
+    assert len(tools) == 12
 
     by_name = {t.name: t for t in tools}
     for name, (expected_required, expected_annotations) in EXPECTED_TOOLS.items():
@@ -1808,3 +1809,319 @@ async def test_list_users_does_not_filter_disabled_users():
     assert len(body["users"]) == 2
     by_id = {u["user_id"]: u["enabled"] for u in body["users"]}
     assert by_id == {"U1": True, "U2": False}
+
+
+# -- msp360_list_packages (PRD-21608) ---------------------------------------
+#
+# AC4 (missing-header -> 401, no vendor call) is already covered generically
+# by the shared credential middleware -- see
+# tests/test_middleware.py::test_mcp_without_credentials_returns_401_with_required_headers,
+# which runs before any tool dispatch and therefore applies to this tool too.
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_packages_returns_trimmed_fields():
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-packages-1", "expires_in": 3600})
+    )
+    respx.get(f"{BASE_URL}/api/Packages").mock(
+        return_value=Response(
+            200,
+            json=[
+                {
+                    "ID": 1,
+                    "Name": "Starter",
+                    "Cost": 9.99,
+                    "StorageLimit": 100.0,
+                    "RestoreLimit": 50.0,
+                    "Description": "Entry tier",
+                    "Enabled": True,
+                    "isGlacierRestoreLimit": False,
+                    "UseRestoreLimit": True,
+                    "GlacierRestoreType": 0,
+                },
+                {
+                    "ID": 2,
+                    "Name": "Enterprise",
+                    "Cost": 99.99,
+                    "StorageLimit": 1000.0,
+                    "RestoreLimit": 500.0,
+                    "Description": "Top tier",
+                    "Enabled": True,
+                    "isGlacierRestoreLimit": True,
+                    "UseRestoreLimit": True,
+                    "GlacierRestoreType": 1,
+                },
+            ],
+        )
+    )
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-list-packages-1")
+    try:
+        result = await mcp.call_tool("msp360_list_packages", {})
+    finally:
+        _credentials_var.reset(token)
+    body = json.loads(_result_text(result))
+    assert body == {
+        "packages": [
+            {
+                "package_id": 1,
+                "name": "Starter",
+                "cost": 9.99,
+                "storage_limit_gb": 100.0,
+                "restore_limit_gb": 50.0,
+                "enabled": True,
+            },
+            {
+                "package_id": 2,
+                "name": "Enterprise",
+                "cost": 99.99,
+                "storage_limit_gb": 1000.0,
+                "restore_limit_gb": 500.0,
+                "enabled": True,
+            },
+        ],
+        "count": 2,
+        "has_more": False,
+    }
+    for package in body["packages"]:
+        assert set(package) == {
+            "package_id",
+            "name",
+            "cost",
+            "storage_limit_gb",
+            "restore_limit_gb",
+            "enabled",
+        }
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_packages_empty_result_is_not_an_error():
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-packages-empty", "expires_in": 3600})
+    )
+    respx.get(f"{BASE_URL}/api/Packages").mock(return_value=Response(200, json=[]))
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-list-packages-empty")
+    try:
+        result = await mcp.call_tool("msp360_list_packages", {})
+    finally:
+        _credentials_var.reset(token)
+    body = json.loads(_result_text(result))
+    assert body == {"packages": [], "count": 0, "has_more": False}
+    assert "error" not in body
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_packages_login_rejected_returns_unauthorized_without_calling_list():
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(401, json={"message": "invalid username or password"})
+    )
+    list_route = respx.get(f"{BASE_URL}/api/Packages").mock(return_value=Response(200, json=[]))
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-list-packages-bad-creds")
+    try:
+        result = await mcp.call_tool("msp360_list_packages", {})
+    finally:
+        _credentials_var.reset(token)
+    envelope = json.loads(_result_text(result))
+    assert envelope["error"]["code"] == "unauthorized"
+    assert envelope["error"]["retryable"] is False
+    assert list_route.call_count == 0
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_packages_isolates_concurrent_tenant_results():
+    def login_side_effect(request):
+        body = json.loads(request.content)
+        token = "tokPackagesA" if body["UserName"] == "tenantA-packages" else "tokPackagesB"
+        return Response(200, json={"access_token": token, "expires_in": 3600})
+
+    def packages_side_effect(request):
+        auth = request.headers["Authorization"]
+        if auth == "Bearer tokPackagesA":
+            name = "Starter"
+        else:
+            name = "Enterprise"
+        return Response(
+            200,
+            json=[
+                {
+                    "ID": 1,
+                    "Name": name,
+                    "Cost": 1.0,
+                    "StorageLimit": 1.0,
+                    "RestoreLimit": 1.0,
+                    "Enabled": True,
+                }
+            ],
+        )
+
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(side_effect=login_side_effect)
+    respx.get(f"{BASE_URL}/api/Packages").mock(side_effect=packages_side_effect)
+
+    mcp = create_mcp_server(Settings())
+
+    async def call_as(username: str) -> dict:
+        token = _set_creds(username, password="pw-" + username)
+        try:
+            result = await mcp.call_tool("msp360_list_packages", {})
+        finally:
+            _credentials_var.reset(token)
+        return json.loads(_result_text(result))
+
+    result_a, result_b = await asyncio.gather(
+        call_as("tenantA-packages"), call_as("tenantB-packages")
+    )
+
+    assert result_a["packages"][0]["name"] == "Starter"
+    assert result_b["packages"][0]["name"] == "Enterprise"
+    assert len(result_a["packages"]) == 1
+    assert len(result_b["packages"]) == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_packages_never_exposes_raw_token_or_password(caplog):
+    distinctive_token = "distinctive-secret-token-packages-456"
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": distinctive_token, "expires_in": 3600})
+    )
+    respx.get(f"{BASE_URL}/api/Packages").mock(
+        return_value=Response(
+            200,
+            json=[{"ID": 1, "Name": "Starter", "Cost": 1.0, "StorageLimit": 1.0, "RestoreLimit": 1.0, "Enabled": True}],
+        )
+    )
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-list-packages-no-leak", password="s3cret-pw-packages")
+    try:
+        with caplog.at_level("DEBUG"):
+            result = await mcp.call_tool("msp360_list_packages", {})
+    finally:
+        _credentials_var.reset(token)
+    result_text = _result_text(result)
+    assert distinctive_token not in result_text
+    assert "s3cret-pw-packages" not in result_text
+    log_text = caplog.text
+    assert distinctive_token not in log_text
+    assert "s3cret-pw-packages" not in log_text
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_packages_default_limit_caps_at_50():
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-packages-60", "expires_in": 3600})
+    )
+    packages = [
+        {"ID": i, "Name": f"Pkg{i}", "Cost": 1.0, "StorageLimit": 1.0, "RestoreLimit": 1.0, "Enabled": True}
+        for i in range(60)
+    ]
+    respx.get(f"{BASE_URL}/api/Packages").mock(return_value=Response(200, json=packages))
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-list-packages-default-limit")
+    try:
+        result = await mcp.call_tool("msp360_list_packages", {})
+    finally:
+        _credentials_var.reset(token)
+    body = json.loads(_result_text(result))
+    assert len(body["packages"]) == 50
+    assert body["has_more"] is True
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_packages_limit_above_count_returns_all():
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-packages-60b", "expires_in": 3600})
+    )
+    packages = [
+        {"ID": i, "Name": f"Pkg{i}", "Cost": 1.0, "StorageLimit": 1.0, "RestoreLimit": 1.0, "Enabled": True}
+        for i in range(60)
+    ]
+    respx.get(f"{BASE_URL}/api/Packages").mock(return_value=Response(200, json=packages))
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-list-packages-limit-200")
+    try:
+        result = await mcp.call_tool("msp360_list_packages", {"limit": 200})
+    finally:
+        _credentials_var.reset(token)
+    body = json.loads(_result_text(result))
+    assert len(body["packages"]) == 60
+    assert body["has_more"] is False
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_packages_hard_cap_wins_over_requested_limit():
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-packages-250c", "expires_in": 3600})
+    )
+    packages = [
+        {"ID": i, "Name": f"Pkg{i}", "Cost": 1.0, "StorageLimit": 1.0, "RestoreLimit": 1.0, "Enabled": True}
+        for i in range(250)
+    ]
+    respx.get(f"{BASE_URL}/api/Packages").mock(return_value=Response(200, json=packages))
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-list-packages-hard-cap")
+    try:
+        result = await mcp.call_tool("msp360_list_packages", {"limit": 500})
+    finally:
+        _credentials_var.reset(token)
+    body = json.loads(_result_text(result))
+    # 250 upstream packages, requested limit 500: the 200-item hard cap (or the
+    # 20,000-character backstop, whichever binds first per AC7) must win.
+    assert len(body["packages"]) <= 200
+    assert body["has_more"] is True
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_packages_upstream_error_on_5xx_or_timeout():
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-packages-5xx", "expires_in": 3600})
+    )
+    respx.get(f"{BASE_URL}/api/Packages").mock(
+        return_value=Response(500, json={"message": "internal server error"})
+    )
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-list-packages-5xx")
+    try:
+        result = await mcp.call_tool("msp360_list_packages", {})
+    finally:
+        _credentials_var.reset(token)
+    envelope = json.loads(_result_text(result))
+    assert envelope["error"]["code"] == "upstream_error"
+    assert envelope["error"]["retryable"] is True
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_list_packages_does_not_filter_disabled_packages():
+    respx.post(f"{BASE_URL}/api/Provider/Login").mock(
+        return_value=Response(200, json={"access_token": "tok-packages-disabled", "expires_in": 3600})
+    )
+    respx.get(f"{BASE_URL}/api/Packages").mock(
+        return_value=Response(
+            200,
+            json=[
+                {"ID": 1, "Name": "Active", "Cost": 1.0, "StorageLimit": 1.0, "RestoreLimit": 1.0, "Enabled": True},
+                {"ID": 2, "Name": "Retired", "Cost": 1.0, "StorageLimit": 1.0, "RestoreLimit": 1.0, "Enabled": False},
+            ],
+        )
+    )
+    mcp = create_mcp_server(Settings())
+    token = _set_creds("user-list-packages-disabled")
+    try:
+        result = await mcp.call_tool("msp360_list_packages", {})
+    finally:
+        _credentials_var.reset(token)
+    body = json.loads(_result_text(result))
+    assert len(body["packages"]) == 2
+    by_id = {p["package_id"]: p["enabled"] for p in body["packages"]}
+    assert by_id == {1: True, 2: False}

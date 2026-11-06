@@ -310,3 +310,10 @@ class Msp360Client:
 
     async def list_user_computers(self, user_id: str) -> Any:
         return await self.get(f"/api/Users/{user_id}/Computers")
+
+    async def list_packages(self) -> Any:
+        # No query parameters, no request body, no vendor-side pagination
+        # (confirmed against the live vendor Swagger document, see
+        # docs/tickets/PRD-21608.md "Current state") -- the tool layer applies
+        # limit/offset client-side, same convention as list_users/list_companies.
+        return await self.get("/api/Packages")
